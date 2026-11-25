@@ -298,6 +298,8 @@ function build(id, def) {
   });
   const boxes = raw.map(toBox), decor = (def.whole ? def.decor : both(def.decor || [])).map(toBox);   // decor: seen, but nothing collides with it
   const lights = (def.lights || []).flatMap(([x, y, z, c]) => [[x, y, z, c], [-x, y, -z, c]]);
+  const slopes = boxes.filter(b => b.kind === 'slope');   // the steps of a hill
+  if (slopes.length) Object.defineProperty(boxes, 'slopes', { value: slopes });
   return {
     id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes: def.whole ? boxGrid(boxes) : boxes, decor, whole: !!def.whole, air: !!def.air, focus: def.focus,
     spawns: { red: def.spawns, blue: def.blue || def.spawns.map(([x, z]) => [-x, -z]) },
@@ -307,8 +309,17 @@ function build(id, def) {
 
 /* ---- bot navigation: a grid of open floor cells linked where a bot can walk straight between them ---- */
 const CELL = 3;
-const solid = (boxes, x, z, r) => !!findBox(boxes, x, z, r, b => b.min[1] < 1.75 && b.max[1] > 0.5 &&
-  x + r > b.min[0] && x - r < b.max[0] && z + r > b.min[2] && z - r < b.max[2]);
+// Height of the ground: 0, or the top of a hill's step.
+export function groundAt(boxes, x, z) {
+  let y = 0;
+  if (boxes.slopes) for (const b of boxes.slopes) if (b.max[1] > y && x > b.min[0] && x < b.max[0] && z > b.min[2] && z < b.max[2]) y = b.max[1];
+  return y;
+}
+function solid(boxes, x, z, r) {
+  const y = groundAt(boxes, x, z);
+  return !!findBox(boxes, x, z, r, b => b.min[1] < y + 1.75 && b.max[1] > y + 0.5 &&
+    x + r > b.min[0] && x - r < b.max[0] && z + r > b.min[2] && z - r < b.max[2]);
+}
 
 function clearWalk(boxes, x0, z0, x1, z1) {
   const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.4);

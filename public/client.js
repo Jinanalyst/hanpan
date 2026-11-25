@@ -1,6 +1,6 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
-import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
+import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, groundAt, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, WALL, alongWall, leanOff, wallAt, lowWall, findWall, peekRoom, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
@@ -628,6 +628,7 @@ const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, wl: 0, 
 let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', eq: 0, al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
 let act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }, cur = act.lo, switchT = 0;   // what I carry right now; set by the server at each spawn
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
+let stepOff = 0;   // the view follows the feet up a step smoothly
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
 let reloadT = 0, reloadDur = 1, shotTimes = [], deathAt = null, killer = 0, wasAlive = true, stepAcc = 0, inputAcc = 0, lastHurt = 0;
 let stance = 0, stanceT = 0, slideT = 0, slideDir = [0, 0], slideNext = 0, holdKneel = store.get('hanpan-hold', '0') === '1';
@@ -716,7 +717,7 @@ function onMsg(m) {
   }
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; leanEnd(); if (m.lo) { stance = me.cr = 0; leanX = leanZ = slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; leanEnd(); if (m.lo) { stance = me.cr = stepOff = 0; leanX = leanZ = slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -899,7 +900,7 @@ function tryFire() {
     for (const [id, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; aimedAt = id; aimedT = t; } }
     const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
     if (W.slot === 1 || Math.random() < 0.5) tracer(from, end);
-    if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range && !(MAP.theme.front && end.z < 0.1 - MAP.size[1])) impact(end, n);   // nothing to hit out at sea
+    if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range && !(MAP.theme.front?.sea != null && end.z < 0.1 - MAP.size[1])) impact(end, n);   // nothing to hit out at sea
   }
 }
 function remoteShot(m) {
@@ -982,7 +983,9 @@ function drawMini() {
   mg.save(); mg.beginPath(); mg.arc(c, c, c - 2, 0, 7); mg.clip();
   mg.translate(c, c); mg.rotate(me.yaw); mg.scale(sc, sc); mg.translate(-me.x, -me.z);
   mg.fillStyle = 'rgba(216,201,163,.55)';
-  for (const b of BOXES) if (b.min[1] < 2 && b.min[0] < me.x + 33 && b.max[0] > me.x - 33 && b.min[2] < me.z + 33 && b.max[2] > me.z - 33) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
+  const hill = BOXES.slopes;
+  if (hill) { mg.fillStyle = 'rgba(216,201,163,.07)'; for (const b of hill) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]); mg.fillStyle = 'rgba(216,201,163,.55)'; }
+  for (const b of BOXES) if (b.kind !== 'slope' && b.min[0] < me.x + 33 && b.max[0] > me.x - 33 && b.min[2] < me.z + 33 && b.max[2] > me.z - 33 && b.min[1] < 2 + (hill ? groundAt(BOXES, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2) : 0)) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
   const t = nowS();
   mg.lineWidth = 0.4; mg.strokeStyle = '#ff5a3c'; mg.fillStyle = 'rgba(255,90,60,.22)';
   for (const [x, z] of war.bombs()) { mg.beginPath(); mg.arc(x, z, 4, 0, 7); mg.fill(); mg.stroke(); }
@@ -1428,7 +1431,10 @@ function updateLocal(dt, t) {
     const sprint = K.ShiftLeft && f > 0 && !me.wl && !me.cr && !ads && !trigger && !aiming;
     const speed = me.wl ? PHYS.lean : slideT > 0 ? PHYS.crouch + (PHYS.slide - PHYS.crouch) * Math.min(1, slideT / 0.45) : me.cr === 2 ? PHYS.prone : me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
     if (K.Space && me.ground && !me.cr && !stance && !me.wl) { me.vy = PHYS.jump; me.ground = false; }
+    const y0 = me.y, stood = me.ground;
     step(me, ix, iz, speed, dt, BOXES);
+    if (stood && me.ground && me.y - y0 > 0.1) stepOff = Math.max(-0.6, stepOff - (me.y - y0));
+    stepOff *= Math.exp(-dt * 13);
     const lo = leanOff(me);
     eyeH += (stanceEye(me.cr) + lo.y - eyeH) * Math.min(1, dt * 12);
     leanX += (lo.x - leanX) * Math.min(1, dt * 20); leanZ += (lo.z - leanZ) * Math.min(1, dt * 20);
@@ -1445,7 +1451,7 @@ function updateLocal(dt, t) {
       inputAcc = 0;
       send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr, wl: me.wl || undefined, pk: me.wl ? +me.pk.toFixed(2) : undefined });
     }
-    cam.position.set(me.x + leanX, me.y + eyeH + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z + leanZ);
+    cam.position.set(me.x + leanX, me.y + eyeH + stepOff + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z + leanZ);
     cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004 + Math.min(1, Math.max(0, slideT) * 4) * 0.06 - (leanX * Math.cos(me.yaw) - leanZ * Math.sin(me.yaw)) * 0.2);
   } else if (deathAt) {
     adsT = 0; trigger = false;

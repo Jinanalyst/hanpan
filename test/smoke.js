@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { Room, cleanChat, KILL_LIMIT } from '../public/shared/game.js';
 import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
-import { getMap, addCity, isReady, randomMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
+import { getMap, addCity, isReady, randomMap, groundAt, randomRoute, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
 import { REAL } from '../public/shared/realcities.js';
 import { BOMBER, HELI, planeAt, bombAt, bombLands, heliAt, flightLife, fallTime } from '../public/shared/air.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
@@ -163,6 +163,28 @@ for (const id of MAP_IDS) {
   { const room = new Room({ minPlayers: 0 }); room.addPlayer('A', 'rifle', () => {}); run(room, 30); assert.equal(room.flights.length, 0, 'other lands stay quiet'); }
   performance.now = realNow;
   console.log('ok  war front: bombs, cover, helicopters, shooting them down, same for both teams');
+}
+
+// Hill 625: the hill can be walked up and down from every side, by players and bots, and the bridge can be crossed
+{
+  const map = getMap('hill'), B = map.boxes, me = (x, z, y = 0) => ({ x, y, z, vx: 0, vy: 0, vz: 0, cr: 0, ground: true });
+  const go = (p, ix, iz, s, speed = PHYS.walk) => { for (let i = 0; i < s * 60; i++) step(p, ix, iz, speed, 1 / 60, B); return p; };
+  assert.equal(groundAt(B, 0, -20), 0); assert.ok(Math.abs(groundAt(B, 2, 18) - 4.5) < 1e-9); assert.equal(groundAt(getMap('compound').boxes, 0, 0), 0);
+  for (const [x, z, ix, iz] of [[4.2, -7.2, 0, 1], [0, 38, 0, -1], [-26, 20.5, 1, 0], [29, 20.5, -1, 0]]) {
+    const p = go(me(x, z), ix, iz, 4.6);
+    assert.ok(p.y > 4.4 && p.y < 4.6, `up the hill from ${x},${z}: ${[p.x, p.y, p.z].map(v => v.toFixed(1))}`);
+  }
+  assert.ok(go(me(4.2, 11.2, 4.5), 0, -1, 4).y < 0.01, 'and down again');
+  for (const b of B) assert.ok(b.kind === 'slope' || b.kind === 'perimeter' || b.min[1] > groundAt(B, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2) - 0.5, 'nothing is buried in the hill: ' + b.kind + b.min);
+  { const p = go(me(32, -43), 0, 1, 1.9); assert.ok(p.y > 2.4, 'up to the bridge: ' + p.y); assert.ok(go(me(32, -33, 2.5), 0, 1, 1).y < 2.4, 'it is broken'); assert.ok(go(me(32, -31), 0, 1, 2).y > 2.4, 'the fallen span leads up'); }
+  { const p = go(me(32, -33, 2.5), 0, 1, 0.45, PHYS.sprint); p.vy = PHYS.jump; p.ground = false; assert.ok(go(p, 0, 1, 1.4, PHYS.sprint).y > 2.4 && p.z > -25, 'run and jump over the gap'); }
+  assert.ok(!hits(32, 0, -33, PHYS.h, B), 'room to walk under the bridge');
+  const { points, main } = map.nav;
+  assert.ok(main.some(k => groundAt(B, ...points[k]) > 4.4), 'bots know the way to the top');
+  let top = 0;
+  for (let i = 0; i < 300; i++) { const r = randomRoute(map, 0, -50); for (let k = 1; k < r.length; k++) assert.ok(Math.abs(groundAt(B, ...r[k]) - groundAt(B, ...r[k - 1])) < 4); if (groundAt(B, ...r.at(-1)) > 4.4) top++; }
+  assert.ok(top > 5, 'and go there: ' + top);
+  console.log('ok  Hill 625: hill, bridge, ' + top + ' of 300 bot walks end at the top');
 }
 
 // 4) Store: paid weapons are fair, locked without ownership, and every product is in the database catalogue

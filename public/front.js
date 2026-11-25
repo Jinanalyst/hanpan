@@ -2,24 +2,9 @@
 // helicopters the server sends (shared/air.js). Nothing in this file decides what gets hit.
 import * as THREE from 'three';
 import { BOMBER, flightLife, planeAt, bombAt, bombLands, heliAt, fallTime } from './shared/air.js';
+import { rnd, clamp, smooth, nowS, bumps, ctex, dots, uvBox, groundMesh } from './frontkit.js';
+import { isWinterKind, drawWinterBox, buildWinter, winterHeight } from './winter.js';
 import { part, box, limb, cylG, ballG, torusG, boxG, mat, bake } from './models.js';
-
-const rnd = (a, b) => a + Math.random() * (b - a);
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const smooth = (a, b, v) => { const k = clamp((v - a) / (b - a), 0, 1); return k * k * (3 - 2 * k); };
-const nowS = () => performance.now() / 1000;
-// Soft, repeatable bumps in about -1..1.
-const bumps = (x, z) => Math.sin(x * 0.31 + z * 0.17) * 0.5 + Math.sin(x * 0.11 - z * 0.23 + 2) * 0.35 + Math.sin(x * 0.73 + z * 0.61) * 0.15;
-
-function ctex(size, draw, repeat = true) {
-  const c = document.createElement('canvas'); c.width = c.height = size;
-  draw(c.getContext('2d'), size);
-  const t = new THREE.CanvasTexture(c);
-  if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-  return t;
-}
-const dots = (g, S, n, cols, max) => { for (let i = 0; i < n; i++) { g.fillStyle = cols[Math.random() * cols.length | 0]; g.globalAlpha = rnd(0.15, 0.6); const s = rnd(1, max); g.fillRect(Math.random() * S, Math.random() * S, s, s); } g.globalAlpha = 1; };
 
 /* ---------------- things on the land ---------------- */
 const OLIVE = 0x4d5237, BURNT = 0x37322b, RUST = 0x5e4632, STEEL = 0x4b4f52, DARK = 0x1e1d1b, LOG = 0x5b4a36;
@@ -38,13 +23,8 @@ function materials(T) {
   });
 }
 const KINDS = new Set(['craft', 'deck', 'ramp', 'hedgehog', 'log', 'tank', 'turret', 'truck', 'cannon', 'earth', 'snag', 'wire', 'crater', 'canvas']);
-export const isFrontKind = k => KINDS.has(k);
+export const isFrontKind = k => KINDS.has(k) || isWinterKind(k);
 
-function uvBox(w, h, d, s) {
-  const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv, dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
-  for (let i = 0; i < 24; i++) { const [a, b] = dims[i / 4 | 0]; uv.setXY(i, uv.getX(i) * a / s, uv.getY(i) * b / s); }
-  return g;
-}
 // Draws one box of the land. T: the client's textures.
 export function drawFrontBox(g, b, w, h, d, x, z, T) {
   const m = materials(T), y0 = b.min[1], o = new THREE.Group(), long = d >= w;
@@ -53,6 +33,7 @@ export function drawFrontBox(g, b, w, h, d, x, z, T) {
   let cast = true;
   switch (b.kind) {
     case 'turret': return;                 // part of the tank
+    default: cast = drawWinterBox(o, b, w, h, d, T); break;
     case 'craft': put(uvBox(w, h, d, 3), m.craft, 0, h / 2, 0); if (Math.min(w, d) < 0.5) box(o, 0.5, 0.1, d, 0, h, 0, mat(STEEL)); break;
     case 'deck': put(uvBox(w, 0.06, d, 3), m.deck, 0, 0.1, 0); cast = false; break;
     case 'ramp': put(uvBox(w, 0.1, d + 0.2, 3), m.deck, 0, 0.16, 0, 0.1); break;
@@ -143,18 +124,10 @@ function height(x, z, hx, hz) {
   return h;
 }
 function terrain(map) {
-  const [hx, hz] = map.size, F = map.theme.front, axis = (half, far) => {
-    const a = [];
-    for (let v = -half; v <= half + 1e-6; v += 1.75) a.push(v);
-    const out = [0.25, 0.6, 1.4, 3, 6, 10, 16, 24, 36, 55, 80, 120, 180, far];
-    return [...out.map(v => -half - v).reverse(), ...a, ...out.map(v => half + v)];
-  };
-  const xs = axis(hx, 300), zs = axis(hz, 300), pos = [], col = [], uv = [], ix = [];
-  const C = { sand: 0xd3bd90, dry: 0xc2aa7c, wet: 0x85745a, mud: 0x75634a, grass: 0x6d7546, grass2: 0x848054, rock: 0xa99f8a, rock2: 0x7c735f, bed: 0x5f6252 }, c = new THREE.Color(), q = new THREE.Color();
+  const [hx, hz] = map.size, F = map.theme.front, q = new THREE.Color();
+  const C = { sand: 0xd3bd90, dry: 0xc2aa7c, wet: 0x85745a, mud: 0x75634a, grass: 0x6d7546, grass2: 0x848054, rock: 0xa99f8a, rock2: 0x7c735f, bed: 0x5f6252 };
   for (const k in C) C[k] = new THREE.Color(C[k]);
-  for (const z of zs) for (const x of xs) {
-    const y = height(x, z, hx, hz), n = bumps(x * 1.3, z * 1.3), n2 = bumps(x * 0.5 + 9, z * 0.5);
-    pos.push(x, y, z); uv.push(x / 4, z / 4);
+  return groundMesh(map, (x, z) => height(x, z, hx, hz), (c, x, z, n, n2) => {
     c.copy(C.sand).lerp(C.dry, n * 0.5 + 0.5);
     c.lerp(C.wet, 1 - smooth(F.sea, F.sea + 7, z + n * 1.5));
     c.lerp(C.bed, smooth(F.sea - 4, F.sea - 22, z));
@@ -162,17 +135,7 @@ function terrain(map) {
     c.lerp(q, smooth(F.sand - 3, F.sand + 4, z + n * 2));
     const d = Math.abs(x) - hx;
     if (d > 0 && z > -hz - 30) { q.copy(C.rock).lerp(C.rock2, n * 0.5 + 0.5).lerp(C.grass, smooth(1.2, 5, d)); c.lerp(q, smooth(0, 0.3, d) * smooth(-hz - 12, -hz + 12, z)); }
-    col.push(c.r, c.g, c.b);
-  }
-  const W = xs.length;
-  for (let j = 0; j + 1 < zs.length; j++) for (let i = 0; i + 1 < W; i++) { const k = j * W + i; ix.push(k, k + W, k + 1, k + 1, k + W, k + W + 1); }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geo.setIndex(ix); geo.computeVertexNormals();
-  const grain = ctex(256, (g, S) => { g.fillStyle = '#e9e6e0'; g.fillRect(0, 0, S, S); dots(g, S, 5200, ['#c9c3b8', '#ffffff', '#b5ae9f', '#d9d4ca'], 3); dots(g, S, 260, ['#8f887a', '#a39c8e'], 6); });
-  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map: grain, roughness: 0.97 }));
-  m.receiveShadow = true;
-  return m;
+  });
 }
 function ship(size = 1) {
   const g = new THREE.Group(), hull = mat(0x4a525a, 0.9), up = mat(0x5c646b, 0.9), dark = mat(0x33383d, 0.9);
@@ -200,6 +163,7 @@ function balloon() {
 const SHIPS = [[-150, -205, 0.15, 1], [-35, -255, -0.1, 1.2], [75, -215, 0.1, 0.9], [185, -250, -0.2, 1.1], [-270, -260, 0.1, 1]];
 
 export function buildFront(map) {
+  if (map.theme.front.river) return buildWinter(map);
   const g = new THREE.Group(), F = map.theme.front, [hx, hz] = map.size;
   g.add(terrain(map));
   const waves = ctex(256, (c, S) => {
@@ -351,6 +315,7 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
   const flights = new Map(), A = new THREE.Vector3(), B = new THREE.Vector3(), O = new THREE.Object3D();
   let nextFlak = 0, nextSea = 0, nextGun = 0, nextInland = 0;
   const later = [], burn = new Map();
+  const atSea = (z, y) => F.sea != null && z < F.sea - 1 && y < 0.5, onIce = (z, y) => F.river && z > F.river[0] && z < F.river[1] && y < 0.5;
 
   function prepare() {
     if (protos) return;
@@ -403,10 +368,11 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
     for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; parts.add(x, 0.3, z, { v: [Math.cos(a) * 5 * s, 0.6, Math.sin(a) * 5 * s], drag: 1.6, life: 1.4, s0: 1 * s, s1: 3 * s, c: 0xe9eeec, a: 0.5 }); }
   }
   function explosion(x, y, z, s = 1) {
+    const [dark, pale] = F.dirt || [0x3a332a, 0x5a4d3c], dust = F.dust || 0xa08c69;
     for (let i = 0; i < 9; i++) parts.add(x + rnd(-1, 1) * s, y + rnd(0.2, 1.4) * s, z + rnd(-1, 1) * s, { v: [rnd(-3, 3), rnd(1, 5), rnd(-3, 3)], drag: 2, life: rnd(0.45, 0.95), s0: 1.6 * s, s1: rnd(3, 4.8) * s, c: i % 3 ? 0xff8a20 : 0xffd080, a: 1, hot: 2 });
-    for (let i = 0; i < 12; i++) parts.add(x + rnd(-1.4, 1.4) * s, y + rnd(0.3, 2) * s, z + rnd(-1.4, 1.4) * s, { v: [rnd(-2, 2) * s, rnd(1.5, 5.5) * s, rnd(-2, 2) * s], drag: 1.1, life: rnd(1.6, 3.4), s0: 1.6 * s, s1: rnd(4.5, 7) * s, c: i % 2 ? 0x3a332a : 0x5a4d3c, a: 0.75 });
-    for (let i = 0; i < 18; i++) parts.add(x, y + 0.3, z, { v: [rnd(-7, 7) * s, rnd(5, 15) * Math.sqrt(s), rnd(-7, 7) * s], g: 15, life: rnd(1, 1.9), s0: rnd(0.25, 0.7) * s, c: 0x3d2f20, a: 1 });
-    for (let i = 0; i < 10; i++) { const a = i / 10 * 6.283; parts.add(x, y + 0.4, z, { v: [Math.cos(a) * 9 * s, 0.5, Math.sin(a) * 9 * s], drag: 2.2, life: rnd(1.2, 2.2), s0: 1.4 * s, s1: 4 * s, c: 0xa08c69, a: 0.5 }); }
+    for (let i = 0; i < 12; i++) parts.add(x + rnd(-1.4, 1.4) * s, y + rnd(0.3, 2) * s, z + rnd(-1.4, 1.4) * s, { v: [rnd(-2, 2) * s, rnd(1.5, 5.5) * s, rnd(-2, 2) * s], drag: 1.1, life: rnd(1.6, 3.4), s0: 1.6 * s, s1: rnd(4.5, 7) * s, c: i % 2 ? dark : pale, a: 0.75 });
+    for (let i = 0; i < 18; i++) parts.add(x, y + 0.3, z, { v: [rnd(-7, 7) * s, rnd(5, 15) * Math.sqrt(s), rnd(-7, 7) * s], g: 15, life: rnd(1, 1.9), s0: rnd(0.25, 0.7) * s, c: F.dirt && i % 2 ? pale : 0x3d2f20, a: 1 });
+    for (let i = 0; i < 10; i++) { const a = i / 10 * 6.283; parts.add(x, y + 0.4, z, { v: [Math.cos(a) * 9 * s, 0.5, Math.sin(a) * 9 * s], drag: 2.2, life: rnd(1.2, 2.2), s0: 1.4 * s, s1: 4 * s, c: dust, a: 0.5 }); }
   }
   function mark(x, y, z, r) {
     O.position.set(x, y + 0.035, z); O.rotation.set(-Math.PI / 2, 0, rnd(0, 6)); O.scale.set(r, r, 1); O.updateMatrix();
@@ -415,7 +381,7 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
   function blast([x, y, z]) {
     if (!map) return;
     const d = far(x, z);
-    if (z < F.sea - 1 && y < 0.5) splash(x, z, 1.5); else { explosion(x, y, z, 1.8); mark(x, y, z, 3.2); }
+    if (atSea(z, y)) splash(x, z, 1.5); else { explosion(x, y, z, 1.8); mark(x, y, z, 3.2); if (onIce(z, y)) splash(x, z, 1.1); }   // water comes up through the ice
     boom(d, panTo(x, z)); if (d < 34) shake(0.085 * (1 - d / 34));
   }
 
@@ -470,7 +436,7 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
     }
     const r = o.getObjectByName('rotor'), tl = o.getObjectByName('tail');
     if (r) r.rotation.y += dt * 24; if (tl) tl.rotation.z += dt * 40;
-    if (p[1] < 24 && Math.random() < dt * 8 && f.down == null && Math.abs(p[0]) < 50) { const a = rnd(0, 6.283), wet = p[2] < F.sea; parts.add(p[0] + Math.cos(a) * 5, 0.4, p[2] + Math.sin(a) * 5, { v: [Math.cos(a) * 5, 0.8, Math.sin(a) * 5], drag: 1.2, life: 1.6, s0: 1.2, s1: 4, c: wet ? 0xdde5e4 : 0xb39d76, a: 0.35 }); }
+    if (p[1] < 24 && Math.random() < dt * 8 && f.down == null && Math.abs(p[0]) < 50) { const a = rnd(0, 6.283), wet = atSea(p[2] - 1, 0); parts.add(p[0] + Math.cos(a) * 5, 0.4, p[2] + Math.sin(a) * 5, { v: [Math.cos(a) * 5, 0.8, Math.sin(a) * 5], drag: 1.2, life: 1.6, s0: 1.2, s1: 4, c: wet ? 0xdde5e4 : F.dust || 0xb39d76, a: 0.35 }); }
     f.snd?.set(o.position.distanceTo(ear), panTo(p[0], p[2]), f.down != null ? -700 * Math.min(1, at - f.down) : 0);
   }
   function round(m) {
@@ -481,8 +447,8 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
     A.set(p[0] + Math.cos(f.yaw) * 2.3, p[1] - 1.05, p[2] - Math.sin(f.yaw) * 2.3); B.set(x, y, z);
     tracer(A, B);
     parts.add(A.x, A.y, A.z, { life: 0.07, s0: 1.3, c: 0xffd070, a: 1, hot: 2.5 });
-    if (z < F.sea - 1 && y < 0.3) parts.add(x, 0.2, z, { v: [0, 4, 0], g: 9, life: 0.8, s0: 0.4, s1: 1.2, c: 0xe2e9e7, a: 0.8 });
-    else for (let i = 0; i < 2; i++) parts.add(x, y + 0.1, z, { v: [rnd(-0.8, 0.8), rnd(1, 3.2), rnd(-0.8, 0.8)], drag: 1.5, life: rnd(0.5, 0.9), s0: 0.3, s1: 1.5, c: m.hit ? 0x7a2a1c : 0x9c8762, a: 0.7 });
+    if (atSea(z, y)) parts.add(x, 0.2, z, { v: [0, 4, 0], g: 9, life: 0.8, s0: 0.4, s1: 1.2, c: 0xe2e9e7, a: 0.8 });
+    else for (let i = 0; i < 2; i++) parts.add(x, y + 0.1, z, { v: [rnd(-0.8, 0.8), rnd(1, 3.2), rnd(-0.8, 0.8)], drag: 1.5, life: rnd(0.5, 0.9), s0: 0.3, s1: 1.5, c: m.hit ? 0x7a2a1c : F.dust || 0x9c8762, a: 0.7 });
     shot(far(p[0], p[2]) * 0.7, panTo(p[0], p[2]));
     if (far(x, z) < 5) shot(far(x, z) + 14, panTo(x, z));
   }
@@ -503,8 +469,8 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
       parts.add(x, y, z, { life: 0.16, s0: 3, s1: 6, c: 0xffc060, a: 1, hot: 3 });
       for (let i = 0; i < 3; i++) parts.add(x + rnd(-1, 1), y + rnd(-1, 1), z + rnd(-1, 1), { v: [0.8, -0.2, 0], life: rnd(3.5, 6), s0: 2.2, s1: rnd(6, 9), c: 0x2b2a29, a: 0.6 });
     }
-    if (t > nextSea) { nextSea = t + rnd(1.2, 3.6); splash(rnd(-110, 110), rnd(-150, -62), rnd(1, 2)); }
-    if (t > nextGun) {
+    if (F.sea != null && t > nextSea) { nextSea = t + rnd(1.2, 3.6); splash(rnd(-110, 110), rnd(-150, -62), rnd(1, 2)); }
+    if (F.sea != null && t > nextGun) {
       nextGun = t + rnd(2.5, 6);
       const [x, z] = SHIPS[Math.random() * 4 | 0];
       for (const o of [10, 22]) { parts.add(x + o, 11, z + 4, { v: [4, 1, 5], life: 0.22, s0: 8, s1: 16, c: 0xffd27a, a: 1, hot: 3 }); parts.add(x + o, 11, z + 6, { v: [2, 1.5, 4], life: 4.5, s0: 8, s1: 24, c: 0x8a8378, a: 0.55 }); }
@@ -512,7 +478,7 @@ export function createWar({ scene, audio, tracer, shot, boom, shake }) {
     if (t > nextInland) {
       nextInland = t + rnd(3, 7);
       const s = Math.random() < 0.5 ? -1 : 1, beside = Math.random() < 0.5, x = beside ? s * rnd(62, 120) : rnd(-90, 90), z = beside ? rnd(-5, 90) : rnd(80, 130);
-      explosion(x, height(x, z, ...map.size), z, 2); const d = far(x, z); later.push([t + d / 340, () => boom(d * 1.6, panTo(x, z))]);
+      explosion(x, F.river ? winterHeight(x, z, ...map.size) : height(x, z, ...map.size), z, 2); const d = far(x, z); later.push([t + d / 340, () => boom(d * 1.6, panTo(x, z))]);
     }
     const k = (t * 34) % 1100 - 550;
     for (const [p, back, side] of squad) { p.position.set(side + 15, 112 + Math.sin(t * 0.7 + side) * 0.8, k - back); p.visible = Math.abs(k) < 480; }
