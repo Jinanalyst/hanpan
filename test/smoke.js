@@ -6,7 +6,8 @@ import http from 'node:http';
 import { Room, cleanChat } from '../public/shared/game.js';
 import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
 import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
-import { WEAPONS, damageAt } from '../public/shared/weapons.js';
+import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
+import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
 import { hits, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
 
@@ -99,6 +100,7 @@ for (const id of MAP_IDS) {
   const ttk = (W, d) => (Math.ceil(100 / Math.round(damageAt(W, d, false) * (W.pellets || 1))) - 1) * W.rate;
   const paid = Object.keys(WEAPONS).filter(k => WEAPONS[k].product);
   for (const k of paid) for (let d = 1; d <= 120; d++) assert.ok(ttk(WEAPONS[k], d) >= ttk(WEAPONS.rifle, d) - 1e-9, `${k} does not beat the Carbine at ${d} m`);
+  for (const k of ['battle', 'bullpup', ...SIDEARMS]) for (let d = 1; d <= 120; d++) assert.ok(ttk(WEAPONS[k], d) >= ttk(WEAPONS.rifle, d) - 1e-9, `${k} does not beat the Carbine at ${d} m`);
   const sql = fs.readFileSync(new URL('../supabase/migrations/20261125055445_store.sql', import.meta.url), 'utf8');
   for (const id of [...paid.map(k => WEAPONS[k].product), ...MAP_LIST.filter(m => m.product).map(m => m.product)]) assert.ok(sql.includes(`('${id}',`), id + ' is in the catalogue');
   const room = new Room({ minPlayers: 0 }), sent = [];
@@ -162,7 +164,101 @@ for (const id of MAP_IDS) {
   console.log(`ok  team chat and voice: team only, cleaned, limited, quality ${db.toFixed(1)} dB`);
 }
 
-// 6) Real server: two clients join, receive snapshots, see each other in the roster
+// 6) Character: outfits survive the trip, bad ones become standard issue, loadouts wait for the next spawn
+{
+  for (const s of SLOTS) assert.ok(itemsOf(s).length <= 36, s + ' fits one character');
+  for (let i = 0; i < 200; i++) { const g = randomGear(); assert.deepEqual(unpackGear(packGear(g)), g); assert.equal(packGear(g).length, SLOTS.length); }
+  const plain = unpackGear('');
+  for (const s of SLOTS) assert.equal(plain[s], Object.keys(GEAR[s].items)[0]);
+  for (const bad of [null, 5, {}, [], '~~~~', 'zzzzzzzzzzzz', '__proto__']) assert.deepEqual(unpackGear(bad), plain);
+  assert.deepEqual(cleanGear({ helmet: 'constructor', vest: 5, camo: 'night', junk: 1 }), { ...plain, camo: 'night' });
+  const room = new Room({ minPlayers: 0 }), got = [];
+  const g = packGear({ ...plain, helmet: 'nvg', camo: 'arctic' });
+  const p = room.players.get(room.addPlayer('P', 'bullpup', m => got.push(m), undefined, null, { sa: 'revolver', eq: 'med', gear: g }));
+  assert.deepEqual([p.lo, p.sa, p.eq, p.w, p.eqN], ['bullpup', 'revolver', 'med', 'bullpup', 1]);
+  assert.equal(got.filter(m => m.t === 'ro').at(-1).ps[0].g, g, 'others are told the outfit');
+  const tp = got.find(m => m.t === 'tp'); assert.deepEqual([tp.lo, tp.sa, tp.eq], ['bullpup', 'revolver', 'med']);
+  room.onMessage(p.id, { t: 'w', w: 'revolver' }); assert.equal(p.w, 'revolver');
+  room.onMessage(p.id, { t: 'w', w: 'pistol' }); assert.equal(p.w, 'revolver', 'only carried guns');
+  room.onMessage(p.id, { t: 'lo', lo: 'sniper', sa: 'mpistol', eq: 'smoke' });
+  room.onMessage(p.id, { t: 'w', w: 'sniper' });
+  assert.deepEqual([p.lo, p.w, p.mag.sniper], ['bullpup', 'revolver', undefined], 'nothing changes mid-life');
+  room.spawn(p); assert.deepEqual([p.lo, p.sa, p.eq, p.eqN], ['sniper', 'mpistol', 'smoke', EQUIP.smoke.n]);
+  for (const bad of [null, {}, 'rifle', '__proto__', 7]) {
+    const q = room.players.get(room.addPlayer('Q', 'rifle', () => {}, undefined, null, { sa: bad, eq: bad, gear: bad }));
+    assert.deepEqual([q.sa, q.eq, q.gear], ['pistol', 'frag', packGear(plain)]);
+  }
+  console.log('ok  character: outfit codes, bad values, sidearm and equipment, next-spawn loadout');
+}
+
+// 7) Equipment: frag (damage, cover, teammates, limits), smoke, med kit
+{
+  const realNow = performance.now.bind(performance);
+  let fake = realNow();
+  performance.now = () => fake;
+  const run = (room, s) => { for (let i = 0; i < s * 30; i++) { fake += 1000 / 30; room.update(1 / 30); } };
+  const make = (n, eq) => { const room = new Room({ minPlayers: 0 }), P = []; for (let i = 0; i < n; i++) { const p = { got: [] }; p.s = room.players.get(room.addPlayer('P' + i, 'rifle', m => p.got.push(m), undefined, null, { eq })); P.push(p); } return { room, P }; };
+  const put = (p, x, z) => Object.assign(p.s, { x, y: 0, z, yaw: 0, prot: 0 });
+  // straight at the ground far ahead, along the open lane
+  const { room, P: [a, b, c, d] } = make(4, 'frag');             // a, c red; b, d blue
+  put(a, 0, 30); put(b, 0, 18); put(c, 0.8, 18); put(d, 25, -25);
+  room.onMessage(a.s.id, { t: 'g', yaw: 0, pitch: 0 });
+  const thrown = b.got.find(m => m.t === 'gt');
+  assert.ok(thrown && thrown.w === 'frag' && thrown.by === a.s.id);
+  room.onMessage(a.s.id, { t: 'g', yaw: 0, pitch: 0 });
+  assert.equal(a.s.eqN, 1, 'not two at once');
+  run(room, 1); const mid = { ...room.nades[0] };
+  assert.ok(mid.y > 0 && mid.z < 30, 'flies forward and stays above the ground');
+  Object.assign(room.nades[0], { x: 0, y: 0.1, z: 16, vx: 0, vy: 0, vz: 0 });
+  run(room, 1.5);
+  assert.ok(b.got.some(m => m.t === 'gx'));
+  assert.ok(!b.s.alive && a.s.k === 1, 'close blast kills and is credited');
+  assert.equal(b.got.find(m => m.t === 'k').w, 'frag');
+  assert.equal(c.s.hp, 100, 'teammates are safe'); assert.equal(d.s.hp, 100, 'out of range');
+  room.spawn(b.s); put(b, 4, -9); put(a, 4, 2);                  // behind the wall from test 2
+  room.onMessage(a.s.id, { t: 'g', yaw: 0, pitch: 0 });
+  Object.assign(room.nades[0], { x: 4, y: 0.1, z: -5, vx: 0, vy: 0, vz: 0 });
+  run(room, 2.4);
+  assert.equal(b.s.hp, 100, 'walls give cover'); assert.equal(a.s.eqN, 0);
+  fake += 5000; room.onMessage(a.s.id, { t: 'g', yaw: 0, pitch: 0 }); assert.equal(room.nades.length, 0, 'none left');
+  // your own grenade
+  room.spawn(a.s); put(a, 0, 30); run(room, 0.1); a.s.prot = 0;
+  const reds = room.score.red;
+  room.onMessage(a.s.id, { t: 'g', yaw: 0, pitch: 0 }); Object.assign(room.nades[0], { x: 0, y: 0.1, z: 30.5, vx: 0, vy: 0, vz: 0 }); run(room, 2.4);
+  assert.ok(!a.s.alive && room.score.red === reds, 'it can kill you, without a point');
+  // bad input and a thrower who leaves
+  const left = make(2, 'frag'); put(left.P[0], 0, 30); put(left.P[1], 0, 28);
+  for (const y of [NaN, undefined, 'x', Infinity]) left.room.onMessage(left.P[0].s.id, { t: 'g', yaw: y, pitch: 0 });
+  assert.equal(left.room.nades.length, 0);
+  left.room.onMessage(left.P[0].s.id, { t: 'g', yaw: 0, pitch: 0 }); left.room.removePlayer(left.P[0].s.id); run(left.room, 3);
+  // a thousand throws: never inside a wall or under the ground, and no wall is thin enough to skip through in one step
+  for (const id of MAP_IDS) {
+    const r = new Room({ minPlayers: 0, map: id }), p = r.players.get(r.addPlayer('T', 'rifle', () => {}));
+    for (const b of r.map.boxes) for (let i = 0; i < 3; i++) assert.ok(b.max[i] - b.min[i] + 0.2 > 20 / 120, id + ' has no paper-thin wall');
+    for (let i = 0; i < 125; i++) {
+      r.spawn(p); p.yaw = Math.random() * 6.28; fake += 2000;
+      r.onMessage(p.id, { t: 'g', yaw: p.yaw, pitch: Math.random() * 1.2 - 0.6 });
+      const n = r.nades[0]; assert.ok(n);
+      for (let k = 0; k < 66; k++) { r.updateNades(1 / 30, fake); if (!r.nades.length) break; assert.ok(n.y > 0 && !r.map.boxes.some(b => ['x', 'y', 'z'].every((a, i) => n[a] > b.min[i] && n[a] < b.max[i])), id + ' grenade stays out of walls'); }
+      r.nades = [];
+    }
+  }
+  // smoke
+  const sm = make(2, 'smoke'); put(sm.P[0], 0, 30); put(sm.P[1], 0, 10);
+  sm.room.onMessage(sm.P[0].s.id, { t: 'g', yaw: 0, pitch: 0 }); Object.assign(sm.room.nades[0], { x: 0, y: 0.1, z: 20, vx: 0, vy: 0, vz: 0 }); run(sm.room, 1.7);
+  assert.ok(sm.room.smoked([0, 1.6, 30], [0, 1.3, 10]), 'blocks the view'); assert.ok(!sm.room.smoked([12, 1.6, 30], [12, 1.3, 10])); assert.equal(sm.P[1].s.hp, 100);
+  const late = []; sm.room.addPlayer('Late', 'rifle', m => late.push(m)); assert.ok(late.some(m => m.t === 'gx' && m.d > 10), 'late joiners see it');
+  run(sm.room, 13); assert.ok(!sm.room.smoked([0, 1.6, 30], [0, 1.3, 10]), 'clears');
+  // med kit
+  const md = make(2, 'med'), q = md.P[0].s; q.prot = 0;
+  md.room.onMessage(q.id, { t: 'g' }); assert.equal(q.eqN, 1, 'not wasted at full health');
+  q.hp = 20; md.room.onMessage(q.id, { t: 'g' }); run(md.room, 1); assert.ok(q.hp > 45 && q.hp < 55); run(md.room, 2); assert.equal(Math.round(q.hp), 80); assert.equal(q.eqN, 0);
+  q.hp = 90; q.eqN = 1; fake += 5000; md.room.onMessage(q.id, { t: 'g' }); run(md.room, 3); assert.equal(q.hp, 100, 'never above full');
+  performance.now = realNow;
+  console.log('ok  equipment: frag, cover, own team, own grenade, limits, smoke, med kit');
+}
+
+// 8) Real server: two clients join, receive snapshots, see each other in the roster
 {
   const port = 3999;
   const sb = http.createServer((q, r) => { const ok = q.headers.authorization === 'Bearer a.b.owner'; r.writeHead(ok ? 200 : 401); r.end(ok ? '[{"product_id":"land:palace"},{"product_id":"weapon:dmr"}]' : '{}'); }).listen(3998);
@@ -195,6 +291,7 @@ for (const id of MAP_IDS) {
     assert.ok(ro.ps.some(p => p.n === 'One') && ro.ps.some(p => p.n === 'Two'));
     const status = await (await fetch(`http://localhost:${port}/status`)).json();
     assert.equal(status.rooms[0].humans, 2);
+    for (const f of ['character.html', 'character.js', 'shared/gear.js', 'soldier.js', 'models.js', 'arsenal.js', 'studio.js', 'profile.js']) assert.equal((await fetch(`http://localhost:${port}/${f}`)).status, 200, f);
     const html = await (await fetch(`http://localhost:${port}/`)).text();
     assert.ok(html.includes('client.js'), 'client page served');
     // land choice: own room per land, 'any' joins the busiest room, bad or missing values get the default land

@@ -65,10 +65,16 @@ html,body{margin:0;height:100%;overflow:hidden;background:#1d2016;color:var(--in
 label,.lbl{display:block;font-size:14px;color:var(--tan);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.05em}
 input[type=text],#nameIn{width:100%;min-height:44px;font:600 17px Rajdhani,sans-serif;padding:0 12px;background:#1f2316;color:var(--ink);border:1px solid #5b6240;border-radius:3px}
 input[type=range]{width:100%;accent-color:var(--tan)}
-.seg{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
-.seg button{font-size:15px;line-height:1.1;padding:4px 6px}.seg small{display:block;font-size:11px;color:var(--tan)}.seg button[aria-pressed=true] small{color:inherit}
+.meCard{display:grid;grid-template-columns:132px minmax(0,1fr);gap:16px;align-items:stretch}
+.portrait{position:relative;display:block;border:1px solid #5b6240;border-radius:3px;overflow:hidden;background:radial-gradient(ellipse at 50% 55%,#7d8468,#262a1b);text-decoration:none;min-height:150px}
+.portrait canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.portrait span{position:absolute;left:0;right:0;bottom:0;padding:5px;text-align:center;background:rgba(20,24,14,.85);color:var(--tan);font-weight:700}
+.portrait:hover{border-color:var(--tan)}.portrait:hover span{background:var(--tan);color:#1d2016}
+.meTop{display:grid;grid-template-columns:1fr auto;gap:14px}.kitSeg{display:flex;gap:6px}.kitSeg button[aria-pressed=true]{background:var(--tan);color:#1d2016;border-color:var(--tan)}
+.picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.small-card .picks{grid-template-columns:1fr;gap:0}
+select{display:block;width:100%;min-height:44px;margin-top:4px;font:600 16px Rajdhani,sans-serif;padding:0 8px;background:#1f2316;color:var(--ink);border:1px solid #5b6240;border-radius:3px;text-transform:none;letter-spacing:0}
+#eqN{font-size:15px;margin-top:6px;white-space:pre}#eqN.out{opacity:.45}#kitNote{margin:8px 0 0;color:var(--tan);min-height:1.4em}
+#nadeWarn{position:absolute;left:50%;bottom:24%;transform:translateX(-50%);font:400 24px 'Black Ops One',sans-serif;color:#ff8a72;background:rgba(20,24,14,.8);border:2px solid var(--red);padding:4px 18px;border-radius:3px}#nadeWarn[hidden]{display:none}
 button{min-height:44px;font:700 16px Rajdhani,sans-serif;border-radius:3px;border:1px solid #5b6240;background:#262a1b;color:var(--ink);cursor:pointer;padding:0 14px}
-.seg button[aria-pressed=true]{background:var(--tan);color:#1d2016;border-color:var(--tan)}
 .lands{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
 .lands button{display:flex;flex-direction:column;align-items:stretch;text-align:left;padding:5px;line-height:1.15;gap:3px}
 .lands canvas,.lands .any{display:flex;width:100%;aspect-ratio:2/1;border-radius:2px;background:#15180f}
@@ -77,18 +83,18 @@ button{min-height:44px;font:700 16px Rajdhani,sans-serif;border-radius:3px;borde
 .lands button[aria-pressed=true]{background:var(--tan);color:#1d2016;border-color:var(--tan)}
 .lands button{position:relative}.lands .lock{position:absolute;right:8px;top:8px;font:700 11px Rajdhani,sans-serif;background:rgba(20,24,14,.85);color:var(--tan);padding:1px 6px;border-radius:2px}
 .locked canvas{filter:grayscale(.6) brightness(.75)}
-@media(max-width:700px){.lands{grid-template-columns:repeat(3,1fr)}.seg{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:420px){.lands,.seg{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.lands{grid-template-columns:repeat(3,1fr)}.meCard{grid-template-columns:1fr}.portrait{min-height:190px}.portrait canvas{object-fit:contain}.picks,.meTop{grid-template-columns:1fr;gap:4px}}
+@media(max-width:420px){.lands{grid-template-columns:repeat(2,1fr)}}
 .go{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:20px}
 #menu .go{position:sticky;bottom:-26px;background:var(--olive);padding:10px 0;margin-top:10px}
 #menu .go p{grid-column:1/-1;margin:0}
 button.primary{background:var(--red);border-color:var(--red);color:#fff}
-button:focus-visible,input:focus-visible{outline:3px solid #ffd54a;outline-offset:2px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #ffd54a;outline-offset:2px}
 #status{min-height:1.4em;margin:12px 0 0;color:#ffb39f;font-size:15px}
 details{margin-top:8px;font-size:15px}summary{cursor:pointer;color:var(--tan)}details ul{padding-left:18px;margin:8px 0}
 .small{font-size:13px;opacity:.7}.small-card{width:min(380px,100%)}
 
-@media(max-height:760px){.lands small{display:none}#menu .card{padding:14px 24px}#menu .card h1{font-size:32px}#menu .tag{margin:2px 0 0}#menu label,#menu .lbl{margin:7px 0 3px}#menu .go{bottom:-14px;margin-top:4px;padding:6px 0}#menu button,#nameIn{min-height:38px}.lands .any{font-size:24px}}
+@media(max-height:760px){.lands small{display:none}#menu .card{padding:14px 24px}#menu .card h1{font-size:32px}#menu .tag{margin:2px 0 0}#menu label,#menu .lbl{margin:7px 0 3px}#menu .go{bottom:-14px;margin-top:4px;padding:6px 0}#menu button,#nameIn,#menu select{min-height:38px}.lands .any{font-size:24px}}
 
 /* wallet login */
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -174,3 +180,38 @@ button.srv{background:none;border-color:transparent;padding:4px 8px}button.srv:h
 @media(max-width:900px){.narrow{display:block}.chat{grid-template-columns:minmax(0,1fr)}.side{border:0}.room.none,.people,.chat.inRoom .side,.chat.showPeople .log,.chat.showPeople .send{display:none}.chat.inRoom.showPeople{grid-template-rows:auto minmax(0,1fr)}.chat.showPeople .people{display:block;border:0}
 .roomTop{flex-wrap:wrap}.roomTop .title{order:-1;flex-basis:100%}.roomTop button{padding:0 12px;font-size:15px}.roomTop #backBtn{margin-right:auto}
 .chatPage .storeTop{gap:10px}.chatPage .brand{font-size:24px}.chatPage .storeTop nav{gap:12px;white-space:nowrap}}
+
+/* character page */
+.charPage{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+.charPage .storeTop{padding:10px 20px;flex:none}
+.char{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,660px)}
+.stage{position:relative;min-height:0;background:radial-gradient(ellipse at 50% 62%,#565d3c,#2a2e1d 58%,#16190f)}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:pan-y}.stage canvas:active{cursor:grabbing}.stage canvas:focus-visible{outline:3px solid #ffd54a;outline-offset:-3px}
+.idBox{position:absolute;left:20px;top:16px;width:min(270px,calc(100% - 40px));background:rgba(20,24,14,.72);padding:4px 14px 12px;border-radius:4px}
+.idBox #nameIn{font:400 22px 'Black Ops One',sans-serif;color:var(--tan)}
+#record{display:grid;grid-template-columns:repeat(5,auto);grid-template-rows:auto auto;grid-auto-flow:column;justify-content:space-between;margin:10px 0 0;text-align:center}
+#record dt{font-size:12px;opacity:.8}#record dd{margin:0;font:400 18px 'Black Ops One',sans-serif;font-variant-numeric:tabular-nums}
+.stageBar{position:absolute;left:0;right:0;bottom:16px;display:flex;justify-content:center;flex-wrap:wrap;gap:8px;padding:0 16px}
+.seg3{display:flex}.seg3 button{border-radius:0;min-width:64px}.seg3 button:first-child{border-radius:3px 0 0 3px}.seg3 button:last-child{border-radius:0 3px 3px 0;border-left:0}
+.seg3 [data-team=red][aria-pressed=true]{background:var(--red);border-color:var(--red)}.seg3 [data-team=blue][aria-pressed=true]{background:#2a6fbd;border-color:#2a6fbd}
+.locker{display:flex;flex-direction:column;min-height:0;background:var(--olive);border-left:2px solid #5b6240}
+.kits{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:14px 16px;border-bottom:1px solid #5b6240}
+.kits button{text-align:left;line-height:1.15;padding:6px 12px;overflow:hidden}.kits b{display:block;font:400 17px 'Black Ops One',sans-serif}.kits small{font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kits button[aria-pressed=true],.item[aria-pressed=true]{border-color:var(--tan);box-shadow:inset 0 0 0 2px var(--tan)}
+.lockerBody{flex:1;min-height:0;display:grid;grid-template-columns:186px minmax(0,1fr)}
+.slots{overflow:auto;padding:6px 10px 14px 16px;border-right:1px solid #5b6240}
+.slots h2{font:700 13px Rajdhani,sans-serif;color:var(--tan);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 2px}
+.slots button{display:block;width:100%;text-align:left;line-height:1.15;padding:3px 10px;min-height:38px;margin-bottom:2px;background:none;border-color:transparent}
+.slots button:hover{background:#262a1b}.slots button[aria-current]{background:var(--tan);color:#1d2016}.slots b{display:block;font-size:16px}.slots small{font-size:13px;opacity:.8;font-weight:600}
+.pick{overflow:auto;padding:14px 16px}
+.pick h1{font:400 26px/1.1 'Black Ops One',sans-serif;color:var(--tan);margin:0}.pick p{margin:2px 0 12px;font-size:15px;opacity:.85}
+.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:10px}.items.wide{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+.item{position:relative;display:flex;flex-direction:column;text-align:left;padding:6px 8px 10px;gap:2px;line-height:1.2}
+.item:hover{border-color:var(--tan)}.item canvas{width:100%;height:auto;background:radial-gradient(ellipse at 50% 60%,#7d8468,#33382a);border-radius:2px;margin-bottom:4px}
+.item small{font-weight:600;font-size:13px;opacity:.85}.item .stats{margin-top:6px;font-size:13px;font-weight:600}
+.item .lock{position:absolute;right:12px;top:10px;font:700 12px Rajdhani,sans-serif;background:rgba(20,24,14,.88);color:var(--tan);padding:1px 7px;border-radius:2px}
+.deploy{display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid #5b6240}.deploy p{flex:1;margin:0!important;min-height:0!important}.deploy a.btn{flex:none;padding:0 22px}
+@media(max-width:1180px){.char{grid-template-columns:minmax(0,1fr) minmax(0,560px)}}
+@media(max-width:940px){.charPage{overflow:auto;height:auto}.char{display:block}.locker{border-left:0;border-top:2px solid #5b6240}.lockerBody{display:block}
+.slots{display:flex;gap:14px;border-right:0;border-bottom:1px solid #5b6240}.slots div{display:flex;flex:none;gap:4px;align-items:center}.slots h2{display:none}.slots button{flex:none;width:auto;white-space:nowrap;margin:0}.deploy{position:sticky;bottom:0;background:var(--olive);flex-wrap:wrap}
+.stage{display:flex;flex-direction:column;gap:12px;padding:10px 14px 14px}.stage canvas{position:static;height:min(54vh,440px)}.stageBar{position:static;padding:0}.idBox{position:static;order:1;width:100%;padding:2px 12px 8px}.idBox label{margin:4px 0}.storeTop nav{white-space:nowrap}}

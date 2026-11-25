@@ -12,7 +12,9 @@
 |---|---|
 | 모드 | 팀 데스매치. 50킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
 | 전장 | 무료 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
-| 무기 | 카빈(연사), 마크스맨 라이플(저격, 스코프), 권총. 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
+| 캐릭터 | `/character.html`에서 3D 병사를 꾸밈: 헤드기어 9종, 얼굴 7종, 군복 8종, 방탄복 5종, 배낭 5종, 장갑, 군화, 벨트 장비, 총 도색 8종. 키트 3개 저장. 외형은 능력치에 영향 없음. 온라인에서 다른 사람에게도 보이고, 팀 색 완장·띠·등 패치는 항상 표시됨 |
+| 장비(G) | 파편 수류탄, 연막탄(봇 시야도 가림), 구급 키트 중 하나. 서버가 궤적·폭발·회복을 판정 |
+| 무기 | 무료 주무기 4종(카빈, 마크스맨 라이플, 전투소총, 불펍)과 보조무기 3종(권총, 리볼버, 기관권총). 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
 | 움직임 | 걷기, 달리기, 앉기, 점프, 정조준(ADS), 지형 충돌, 낮은 턱 자동으로 오르기 |
 | 네트워크 | 서버 권위형 판정, 20Hz 스냅샷, 클라이언트 예측 + 보간, **지연 보상**(쏜 사람 화면 기준으로 판정) |
 | 치트 방어(기본) | 이동 속도 검증 및 되돌리기, 발사 속도와 탄약을 서버가 관리, 조준 방향 검증, 메시지 크기·속도 제한 |
@@ -115,6 +117,13 @@ public/index.html        클라이언트 페이지
 public/login.html/.js    솔라나 지갑 로그인 페이지
 public/store.html/.js    상점 페이지
 public/servers.html/.js  채팅 서버 페이지 (지갑 주소로 친구 초대)
+public/character.html/.js 캐릭터 페이지 (외형, 무기, 장비, 키트 3개)
+public/profile.js        캐릭터 저장(이 브라우저의 localStorage), 온라인 전적
+public/soldier.js        병사 모델과 장비 외형
+public/arsenal.js        총·수류탄 모델 (1인칭, 다른 병사, 캐릭터 페이지가 같이 씀)
+public/models.js         모델링 도구, 위장 무늬, 메시 합치기
+public/studio.js         카드와 메뉴에 쓰는 정지 그림
+public/shared/gear.js    외형 목록과 코드 변환 (새 항목은 반드시 맨 뒤에 추가)
 public/voice.js          팀 음성(녹음·재생), voice-worklet.js는 마이크 처리
 public/shared/adpcm.js   음성 압축 (말하는 사람당 약 8KB/s)
 public/floorplan.js      전장 미니 평면도
@@ -128,7 +137,7 @@ public/client.js         렌더링(Three.js), 입력, 예측·보간, HUD, 사�
 public/shared/game.js    매치 규칙, 판정, 봇 AI (서버와 연습 모드가 같이 씀)
 public/shared/physics.js 이동·충돌·레이캐스트 (서버와 클라이언트가 같이 씀)
 public/shared/map.js     전장 8곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
-public/shared/weapons.js 무기 수치
+public/shared/weapons.js 무기와 장비 수치
 test/smoke.js            스모크 테스트
 ```
 
@@ -136,12 +145,12 @@ test/smoke.js            스모크 테스트
 
 ## 프로토콜 (JSON over WebSocket `/ws`)
 
-클라이언트 → 서버: `join{name,lo,map,token}`(map은 전장 id 또는 `any`, token은 로그인한 경우의 Supabase 토큰), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `c{x}`(팀 채팅), 바이너리(음성 324바이트, 초당 25개), `po{s}`(핑 응답)
-서버 → 클라이언트: `welcome`, `tp`(위치 강제 이동), `s`(스냅샷), `ro`(명단), `sh`(다른 사람 사격), `hit`, `dmg`, `k`(킬), `rl`(장전 시작), `end`/`start`, `pi`(핑)
+클라이언트 → 서버: `join{name,lo,sa,eq,gear,map,token}`(lo 주무기, sa 보조무기, eq 장비, gear 외형 코드, map은 전장 id 또는 `any`, token은 로그인한 경우의 Supabase 토큰), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `g{yaw,pitch}`(장비 사용), `lo{lo,sa,eq}`(다음 리스폰부터 쓸 무기), `c{x}`(팀 채팅), 바이너리(음성 324바이트, 초당 25개), `po{s}`(핑 응답)
+서버 → 클라이언트: `welcome`, `tp`(위치 강제 이동), `s`(스냅샷), `ro`(명단), `sh`(다른 사람 사격), `hit`, `dmg`, `k`(킬), `rl`(장전 시작), `gt`(수류탄 던짐), `gx`(폭발·연막), `heal`(회복 시작), `end`/`start`, `pi`(핑)
 
 ## 실제 서비스 전에 해야 할 것 (우선순위 순서)
 
-1. **그래픽 에셋 교체**: 지금은 박스로 만든 프로토타입 모델입니다. 실제 사람처럼 보이려면 리깅된 캐릭터(glTF)와 무기 모델이 필요합니다. 시작용으로는 Mixamo(애니메이션), Quaternius·Kenney(무료 로우폴리), 유료 에셋 스토어를 쓰면 됩니다. `makeSoldier()`와 `buildRifle()` 등을 `GLTFLoader`로 바꾸면 됩니다.
+1. **그래픽 에셋 교체**: 지금은 박스로 만든 프로토타입 모델입니다. 실제 사람처럼 보이려면 리깅된 캐릭터(glTF)와 무기 모델이 필요합니다. 시작용으로는 Mixamo(애니메이션), Quaternius·Kenney(무료 로우폴리), 유료 에셋 스토어를 쓰면 됩니다. `soldier.js`의 `makeSoldier()`와 `arsenal.js`의 `buildGun()`을 `GLTFLoader`로 바꾸면 됩니다.
 2. **계정과 저장**: 로그인(카카오·구글 OAuth), 전적, 레벨. DB는 Postgres나 Supabase를 추천합니다.
 3. **매치메이킹 개선**: 지금은 "빈자리가 있는 첫 방" 방식입니다. 실력 기반 매칭, 친구 초대, 방 만들기를 추가하세요.
 4. **치트 방어 강화**: 이동을 서버에서도 시뮬레이션하고(지금은 속도 상한 검증만 함), 비정상 명중률을 탐지하고, 신고 기능을 넣으세요. 브라우저 게임은 클라이언트를 숨길 수 없어서 서버 검증이 전부입니다.

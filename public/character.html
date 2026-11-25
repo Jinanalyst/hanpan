@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Character · HANPAN 한판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body class="charPage">
+<header class="storeTop">
+  <a href="./" class="brand">HANPAN</a>
+  <nav><a href="./">Play</a> <a href="store.html">Store</a> <a href="servers.html">Servers</a></nav>
+</header>
+<main class="char">
+  <section class="stage" aria-label="Your soldier">
+    <canvas id="view" aria-label="3D view of your soldier. Drag to turn."></canvas>
+    <div class="idBox">
+      <label for="nameIn">Call sign</label>
+      <input id="nameIn" type="text" maxlength="16" autocomplete="off" spellcheck="false">
+      <dl id="record"></dl>
+    </div>
+    <div class="stageBar">
+      <div class="seg3" id="teamSeg" role="group" aria-label="Preview team"><button type="button" data-team="red">Red</button><button type="button" data-team="blue">Blue</button></div>
+      <button type="button" id="swap">Show sidearm</button>
+      <button type="button" id="dice">Random outfit</button>
+    </div>
+  </section>
+  <section class="locker" aria-label="Locker">
+    <div class="kits" id="kits" role="group" aria-label="Kit"></div>
+    <div class="lockerBody">
+      <nav class="slots" id="slots" aria-label="Slots"></nav>
+      <div class="pick">
+        <h1 id="slotName"></h1>
+        <p id="slotNote"></p>
+        <div class="items" id="items" role="group" aria-labelledby="slotName"></div>
+      </div>
+    </div>
+    <div class="deploy"><p id="status" role="status"></p><a class="btn primary" href="./">Play with this kit</a></div>
+  </section>
+</main>
+<script type="module" src="character.js"></script>
+</body>
+</html>

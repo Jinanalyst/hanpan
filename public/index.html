@@ -22,11 +22,12 @@
   <div id="vign"></div>
   <div id="scope"></div>
   <div id="hpbox"><span id="hpN">100</span><div class="bar"><i id="hpB"></i></div></div>
-  <div id="ammobox"><div id="wName">Carbine</div><div class="ammo"><b id="ammoN">30</b><span id="resN">/ 150</span></div><div class="bar"><i id="rlB"></i></div></div>
+  <div id="ammobox"><div id="wName">Carbine</div><div class="ammo"><b id="ammoN">30</b><span id="resN">/ 150</span></div><div class="bar"><i id="rlB"></i></div><div id="eqN"></div></div>
   <div id="net"></div>
   <div id="talk"></div>
   <div id="chatBox"><div id="chatLog" role="log" aria-label="Team chat"></div><div id="chatRow" hidden><span>Team</span><input id="chatIn" type="text" maxlength="120" autocomplete="off" aria-label="Message to your team"></div></div>
   <div id="micBox" hidden></div>
+  <div id="nadeWarn" hidden>Grenade!</div>
   <div id="center"></div>
   <div id="board" hidden></div>
 </div>
@@ -35,10 +36,18 @@
   <div class="card">
     <div class="top"><h1>HANPAN</h1><div id="account"></div></div>
     <p class="tag">Team deathmatch. Red versus Blue. First team to 50 kills wins.</p>
-    <label for="nameIn">Call sign</label>
-    <input id="nameIn" maxlength="16" autocomplete="off" spellcheck="false">
-    <span class="lbl">Primary weapon</span>
-    <div class="seg" id="loSeg"></div>
+    <div class="meCard">
+      <a class="portrait" href="character.html" aria-label="Edit character"><canvas id="portrait" width="240" height="280"></canvas><span>Edit character</span></a>
+      <div class="meBox">
+        <div class="meTop"><div><label for="nameIn">Call sign</label><input id="nameIn" maxlength="16" autocomplete="off" spellcheck="false"></div>
+        <div><span class="lbl" id="kitLbl">Kit</span><div class="kitSeg" id="kitSeg" role="group" aria-labelledby="kitLbl"></div></div></div>
+        <div class="picks">
+          <label>Primary<select data-pick="lo"></select></label>
+          <label>Sidearm<select data-pick="sa"></select></label>
+          <label>Equipment<select data-pick="eq"></select></label>
+        </div>
+      </div>
+    </div>
     <span class="lbl" id="landLbl">Land</span>
     <div class="lands" id="landSeg" role="group" aria-labelledby="landLbl"></div>
     <label class="check"><input id="voiceOn" type="checkbox"> Team voice (hold V to talk)</label>
@@ -48,7 +57,7 @@
     <details><summary>Controls</summary>
       <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Space</b> jump</li>
       <li><b>Left click</b> fire · <b>Right click</b> aim down sights · <b>R</b> reload</li>
-      <li><b>1 / 2</b> primary / sidearm · <b>Tab</b> scoreboard · <b>Esc</b> pause</li>
+      <li><b>1 / 2</b> primary / sidearm · <b>G</b> grenade or med kit · <b>Tab</b> scoreboard · <b>Esc</b> pause</li>
       <li>Hold <b>V</b> to talk to your team · <b>Enter</b> team chat</li></ul>
       <p class="small">Desktop with mouse and keyboard.</p>
     </details>
@@ -59,6 +68,12 @@
   <div class="card small-card">
     <h2>Paused</h2>
     <p>The match keeps running while you are here.</p>
+    <div class="picks">
+      <label>Primary<select data-pick="lo"></select></label>
+      <label>Sidearm<select data-pick="sa"></select></label>
+      <label>Equipment<select data-pick="eq"></select></label>
+    </div>
+    <p id="kitNote" role="status"></p>
     <div id="mutes" hidden><h3>Teammates</h3><ul></ul></div>
     <div class="go"><button id="resume" class="primary">Resume</button><button id="leave">Leave match</button></div>
   </div>

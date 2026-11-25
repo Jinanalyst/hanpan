@@ -95,6 +95,28 @@ export function rayMap(o, d, boxes, maxT = 500, n) {
   return t;
 }
 
+// Thrown grenade: n = {x,y,z,vx,vy,vz}. Call with a fixed small dt so server and clients agree on the path.
+export const NADE_DT = 1 / 120;   // short enough that even the thinnest wall is never skipped
+const NADE_R = 0.1;
+const nadeHit = (x, y, z, boxes) => {
+  for (const b of boxes) {
+    if (x + NADE_R > b.min[0] && x - NADE_R < b.max[0] && y + NADE_R > b.min[1] && y - NADE_R < b.max[1] && z + NADE_R > b.min[2] && z - NADE_R < b.max[2]) return true;
+  }
+  return false;
+};
+export function stepNade(n, dt, boxes) {
+  n.vy -= 14 * dt;
+  for (const [k, v] of [['x', 'vx'], ['z', 'vz'], ['y', 'vy']]) {
+    const old = n[k];
+    n[k] += n[v] * dt;
+    const floor = k === 'y' && n.y < NADE_R;
+    if (!floor && !nadeHit(n.x, n.y, n.z, boxes)) continue;
+    n[k] = floor ? NADE_R : old;
+    if (k === 'y' && n.vy < 0) { n.vx *= 0.75; n.vz *= 0.75; }
+    n[v] *= Math.abs(n[v]) < 0.8 ? 0 : -0.45;
+  }
+}
+
 export const dirFrom = (yaw, pitch) => [
   -Math.sin(yaw) * Math.cos(pitch),
   Math.sin(pitch),

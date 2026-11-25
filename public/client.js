@@ -1,8 +1,14 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
 import { getMap, isMap, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
-import { PHYS, step, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
-import { WEAPONS, PRIMARIES, isPrimary } from './shared/weapons.js';
+import { PHYS, NADE_DT, step, stepNade, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
+import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
+import { packGear, unpackGear } from './shared/gear.js';
+import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
+import { makeSoldier, setWeapon, disposeSoldier, outfit } from './soldier.js';
+import { buildGun, buildEquip } from './arsenal.js';
+import { bake, box, dispose } from './models.js';
+import { snap, closeStudio } from './studio.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
 import { Room, cleanName } from './shared/game.js';
@@ -260,45 +266,6 @@ function loadMap(id) {
 }
 
 /* ---------------- soldiers ---------------- */
-const TEAMC = {
-  red: { u: 0xb59a6a, v: 0x6e5c40, band: 0xc0392b, helm: 0x8a7550 },
-  blue: { u: 0x5b6b43, v: 0x3e4832, band: 0x2f6fd0, helm: 0x4f5a3a },
-};
-const matCache = {};
-const sm = (c, r = 0.9, m = 0) => matCache[c + ':' + r] || (matCache[c + ':' + r] = new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m }));
-function addBox(par, w, h, d, x, y, z, mat) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.position.set(x, y, z); m.castShadow = true; par.add(m); return m;
-}
-function makeSoldier(team) {
-  const C = TEAMC[team], g = new THREE.Group(), u = {};
-  u.legs = [-1, 1].map(s => {
-    const l = new THREE.Group(); l.position.set(s * 0.11, 0.9, 0);
-    addBox(l, 0.17, 0.46, 0.19, 0, -0.23, 0, sm(C.u));
-    const knee = new THREE.Group(); knee.position.y = -0.45;
-    addBox(knee, 0.16, 0.4, 0.18, 0, -0.2, 0, sm(C.u)); addBox(knee, 0.18, 0.1, 0.28, 0, -0.41, -0.04, sm(0x2a2420));
-    l.add(knee); l.userData.knee = knee; g.add(l); return l;
-  });
-  const torso = new THREE.Group(); torso.position.y = 0.9; g.add(torso); u.torso = torso;
-  addBox(torso, 0.4, 0.56, 0.24, 0, 0.3, 0, sm(C.u));
-  addBox(torso, 0.44, 0.42, 0.3, 0, 0.34, 0, sm(C.v));
-  addBox(torso, 0.34, 0.12, 0.08, 0, 0.2, -0.18, sm(C.v));
-  addBox(torso, 0.3, 0.34, 0.12, 0, 0.36, 0.2, sm(C.v)); // pack
-  const head = new THREE.Group(); head.position.y = 0.62; torso.add(head); u.head = head;
-  addBox(head, 0.21, 0.24, 0.23, 0, 0.12, 0, sm(0xc99a73));
-  addBox(head, 0.28, 0.14, 0.3, 0, 0.27, 0, sm(C.helm));
-  addBox(head, 0.3, 0.04, 0.33, 0, 0.21, 0, sm(C.helm));
-  addBox(head, 0.18, 0.05, 0.02, 0, 0.15, -0.12, sm(0x1c1c1c, 0.4));
-  const aim = new THREE.Group(); aim.position.set(0, 0.5, 0); torso.add(aim); u.aim = aim;
-  addBox(aim, 0.12, 0.12, 0.36, 0.22, -0.07, -0.16, sm(C.u));
-  addBox(aim, 0.13, 0.13, 0.08, 0.22, -0.07, -0.02, sm(C.band));
-  addBox(aim, 0.11, 0.11, 0.3, 0.12, -0.1, -0.42, sm(C.u));
-  addBox(aim, 0.12, 0.12, 0.46, -0.18, -0.06, -0.3, sm(C.u));
-  addBox(aim, 0.06, 0.09, 0.72, 0.05, -0.04, -0.58, sm(0x1d1f21, 0.5, 0.5));
-  addBox(aim, 0.05, 0.14, 0.07, 0.05, -0.14, -0.52, sm(0x1d1f21, 0.5, 0.5));
-  g.userData = u;
-  return g;
-}
 function nameTag(text, color) {
   const c = document.createElement('canvas'); c.width = 256; c.height = 48;
   const g = c.getContext('2d'); g.font = '700 30px Rajdhani, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -308,75 +275,18 @@ function nameTag(text, color) {
 }
 
 /* ---------------- viewmodel ---------------- */
-const vmMat = (c, r = 0.55, m = 0.5) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
-const METAL = vmMat(0x3b3f44, 0.5, 0.35), POLY = vmMat(0x34363a, 0.8, 0.05), GLOVE = vmMat(0x3a342c, 0.9, 0);
-function vp(g, w, h, d, x, y, z, mat, rx = 0) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); return m; }
-function vcyl(g, r, l, x, y, z, mat) { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 14), mat); m.rotation.x = Math.PI / 2; m.position.set(x, y, z); g.add(m); return m; }
-function vmArms(g, team, left, right) {
-  const sleeve = vmMat(TEAMC[team].u, 0.95, 0);
-  for (const [p, s] of [[right, 1], [left, -1]]) {
-    vp(g, 0.06, 0.07, 0.1, p[0], p[1], p[2], GLOVE);
-    const arm = vp(g, 0.08, 0.08, 0.5, p[0] + s * 0.06, p[1] - 0.09, p[2] + 0.27, sleeve, 0.32);
-    arm.rotation.y = s * 0.12;
+function vmArms(g, M, left, right) {
+  for (const [p, q] of [[right, 1], [left, -1]]) {
+    box(g, 0.06, 0.07, 0.1, p[0], p[1], p[2], M.glove, 0.02);
+    box(g, 0.08, 0.08, 0.5, p[0] + q * 0.06, p[1] - 0.09, p[2] + 0.27, M.cloth, 0.025, 0.32, q * 0.12);
   }
 }
-function buildRifle(team) {
-  const g = new THREE.Group();
-  vp(g, 0.07, 0.09, 0.42, 0, 0, 0, METAL); vp(g, 0.075, 0.08, 0.3, 0, -0.005, -0.35, POLY);
-  vcyl(g, 0.013, 0.24, 0, 0.008, -0.6, METAL); vp(g, 0.03, 0.03, 0.06, 0, 0.008, -0.74, METAL);
-  vp(g, 0.05, 0.17, 0.08, 0, -0.12, -0.07, METAL, 0.18); vp(g, 0.04, 0.12, 0.05, 0, -0.09, 0.12, POLY, -0.35);
-  vp(g, 0.055, 0.085, 0.22, 0, -0.015, 0.31, POLY);
-  vp(g, 0.03, 0.02, 0.3, 0, 0.055, -0.12, METAL);
-  // open red-dot frame so the world stays visible when aiming
-  const sy = 0.09;
-  vp(g, 0.054, 0.008, 0.06, 0, sy + 0.025, -0.02, METAL); vp(g, 0.054, 0.008, 0.06, 0, sy - 0.025, -0.02, METAL);
-  vp(g, 0.008, 0.058, 0.06, -0.025, sy, -0.02, METAL); vp(g, 0.008, 0.058, 0.06, 0.025, sy, -0.02, METAL);
-  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0016, 12), new THREE.MeshBasicMaterial({ color: 0xff2a2a }));
-  dot.position.set(0, sy, -0.04); g.add(dot);
-  vmArms(g, team, [0, -0.05, -0.36], [0, -0.1, 0.1]);
-  return { g, muzzle: new THREE.Vector3(0, 0.008, -0.78), hip: new THREE.Vector3(0.17, -0.16, -0.42), ads: new THREE.Vector3(0, -0.09, -0.3) };
+function buildVMGun(id, M, finish) {
+  const v = buildGun(id, finish);
+  vmArms(v.g, M, v.left, v.right);
+  bake(v.g, false);
+  return v;
 }
-function buildSniper(team) {
-  const g = new THREE.Group();
-  vp(g, 0.07, 0.09, 0.5, 0, 0, 0, METAL); vp(g, 0.08, 0.07, 0.3, 0, -0.01, -0.38, vmMat(0x3d4a2f, 0.8, 0.1));
-  vcyl(g, 0.015, 0.5, 0, 0.01, -0.75, METAL); vp(g, 0.035, 0.035, 0.08, 0, 0.01, -1.02, METAL);
-  vcyl(g, 0.028, 0.32, 0, 0.095, -0.06, METAL); vcyl(g, 0.034, 0.05, 0, 0.095, -0.22, METAL); vcyl(g, 0.034, 0.05, 0, 0.095, 0.1, METAL);
-  vp(g, 0.05, 0.1, 0.06, 0, -0.1, -0.05, METAL); vp(g, 0.04, 0.12, 0.05, 0, -0.09, 0.15, POLY, -0.35);
-  vp(g, 0.06, 0.11, 0.26, 0, -0.03, 0.36, vmMat(0x3d4a2f, 0.8, 0.1));
-  vmArms(g, team, [0, -0.06, -0.38], [0, -0.1, 0.13]);
-  return { g, muzzle: new THREE.Vector3(0, 0.01, -1.07), hip: new THREE.Vector3(0.17, -0.17, -0.45), ads: new THREE.Vector3(0, -0.095, -0.28) };
-}
-function buildPistol(team) {
-  const g = new THREE.Group();
-  vp(g, 0.04, 0.045, 0.21, 0, 0.035, -0.05, METAL); vp(g, 0.037, 0.03, 0.17, 0, 0.005, -0.04, POLY);
-  vp(g, 0.035, 0.11, 0.05, 0, -0.06, 0.04, POLY, -0.25); vp(g, 0.006, 0.012, 0.006, 0, 0.063, -0.15, METAL);
-  vp(g, 0.014, 0.012, 0.006, 0, 0.063, 0.05, METAL);
-  vmArms(g, team, [-0.03, -0.07, 0.03], [0.01, -0.07, 0.05]);
-  return { g, muzzle: new THREE.Vector3(0, 0.035, -0.17), hip: new THREE.Vector3(0.14, -0.15, -0.36), ads: new THREE.Vector3(0, -0.063, -0.34) };
-}
-// Shared builder for the store weapons. Same open sight as the Carbine.
-function buildKit(team, { body, guard, barrel, stock, color, mag, extra }) {
-  const g = new THREE.Group(), col = vmMat(color, 0.75, 0.1), front = -body / 2 - guard;
-  vp(g, 0.07, 0.09, body, 0, 0, 0, METAL); vp(g, 0.078, 0.08, guard, 0, -0.005, -body / 2 - guard / 2, col);
-  vcyl(g, 0.014, barrel, 0, 0.008, front - barrel / 2, METAL);
-  vp(g, 0.04, 0.12, 0.05, 0, -0.09, body * 0.3, POLY, -0.35);
-  if (mag) vp(g, mag[0], mag[1], mag[2], 0, -0.04 - mag[1] / 2, -0.06, METAL, mag[3] || 0);
-  if (stock) vp(g, 0.055, 0.085, stock, 0, -0.015, body / 2 + stock / 2, col);
-  const sy = 0.09, sz = -0.02;
-  vp(g, 0.054, 0.008, 0.06, 0, sy + 0.025, sz, METAL); vp(g, 0.054, 0.008, 0.06, 0, sy - 0.025, sz, METAL);
-  vp(g, 0.008, 0.058, 0.06, -0.025, sy, sz, METAL); vp(g, 0.008, 0.058, 0.06, 0.025, sy, sz, METAL);
-  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0016, 12), new THREE.MeshBasicMaterial({ color: 0x5fff6a }));
-  dot.position.set(0, sy, sz - 0.02); g.add(dot);
-  if (extra) extra(g, col);
-  vmArms(g, team, [0, -0.05, front + guard * 0.45], [0, -0.1, body * 0.28]);
-  return { g, muzzle: new THREE.Vector3(0, 0.008, front - barrel), hip: new THREE.Vector3(0.17, -0.16, -0.4), ads: new THREE.Vector3(0, -0.09, -0.3) };
-}
-const KITS = {
-  smg: { body: 0.3, guard: 0.14, barrel: 0.1, stock: 0.12, color: 0x7a5a2a, mag: [0.04, 0.22, 0.05, 0.1] },
-  shotgun: { body: 0.36, guard: 0.3, barrel: 0.2, stock: 0.24, color: 0x6b4226, extra: (g, col) => { vcyl(g, 0.016, 0.42, 0, -0.035, -0.4, METAL); vp(g, 0.06, 0.06, 0.16, 0, -0.04, -0.36, col); } },
-  dmr: { body: 0.44, guard: 0.3, barrel: 0.36, stock: 0.28, color: 0x4d5a3c, mag: [0.05, 0.12, 0.08, 0.05] },
-  lmg: { body: 0.48, guard: 0.26, barrel: 0.3, stock: 0.22, color: 0x3e4a52, mag: [0.15, 0.15, 0.16], extra: g => { for (const s of [-1, 1]) vp(g, 0.012, 0.16, 0.012, s * 0.05, -0.1, -0.5, METAL); } },
-};
 const flashTex = ctex(64, 64, (g, w, h) => {
   const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
   gr.addColorStop(0, 'rgba(255,250,220,1)'); gr.addColorStop(0.3, 'rgba(255,190,80,.9)'); gr.addColorStop(1, 'rgba(255,120,20,0)');
@@ -388,12 +298,13 @@ muzzle.visible = false;
 let VMS = {}, vmTeam = '';
 const vmRoot = new THREE.Group(); vmScene.add(vmRoot);
 function buildVM(team) {
-  if (team === vmTeam) return;
-  vmTeam = team;
-  vmRoot.clear();
-  VMS = { rifle: buildRifle(team), sniper: buildSniper(team), pistol: buildPistol(team) };
-  for (const k in KITS) VMS[k] = buildKit(team, KITS[k]);
-  for (const k in VMS) { VMS[k].g.visible = false; vmRoot.add(VMS[k].g); }
+  const key = team + packGear(kit().gear);
+  if (key === vmTeam) return;
+  vmTeam = key;
+  vmRoot.remove(muzzle); dispose(vmRoot); vmRoot.clear();
+  const gear = kit().gear, M = outfit(team, gear);
+  VMS = {};
+  for (const k in WEAPONS) { VMS[k] = buildVMGun(k, M, gear.finish); VMS[k].g.visible = false; vmRoot.add(VMS[k].g); }
   vmRoot.add(muzzle);
 }
 
@@ -437,6 +348,61 @@ function updateFx(dt) {
   }
 }
 
+/* ---------------- grenades ---------------- */
+const nades = new Map();   // in the air: id -> { m, n, acc, fuse }
+function nadeThrown(m) {
+  if (!EQUIP[m.w]?.thrown) return;
+  const g = bake(buildEquip(m.w)), n = { x: m.o[0], y: m.o[1], z: m.o[2], vx: m.v[0], vy: m.v[1], vz: m.v[2] };
+  g.position.set(n.x, n.y, n.z); scene.add(g);
+  nades.set(m.id, { g, n, acc: 0, left: 6, w: m.w, tm: m.tm, by: m.by });
+  if (m.by === myId) { noiseSfx(0.12, 1400, 0.2); switchT = nowS(); reloadT = 0; }
+}
+function nadeGone(id) { const q = nades.get(id); if (q) { scene.remove(q.g); dispose(q.g); nades.delete(id); } }
+function nadeBurst(m) {
+  nadeGone(m.id);
+  const p = new THREE.Vector3(...m.p), dx = p.x - me.x, dz = p.z - me.z, dist = Math.hypot(dx, dz), pan = -Math.sin(wrapA(Math.atan2(-dx, -dz) - me.yaw)), v = 1 / (1 + dist * 0.05);
+  if (m.w === 'smoke') { addSmoke(p, m.d || EQUIP.smoke.lasts); noiseSfx(0.9, 3000, 0.22 * v); return; }
+  for (let i = 0; i < 9; i++) puff(V.set(p.x + rnd(-0.8, 0.8), p.y + rnd(0.1, 1.2), p.z + rnd(-0.8, 0.8)), i < 4 ? 0xffb040 : 0x3a342c, rnd(1.2, 2.4), rnd(0.35, 0.9));
+  for (let i = 0; i < 8; i++) tracer(p, V.set(p.x + rnd(-4, 4), p.y + rnd(0.3, 3), p.z + rnd(-4, 4)).clone());
+  blastLight.position.set(p.x, p.y + 0.6, p.z); blastLight.intensity = 90;
+  shotSfx('sniper', dist * 0.4, pan); noiseSfx(0.7, 140, 0.9 * v); noiseSfx(0.5, 400, 0.6 * v, 0.03);
+  if (dist < 14) shake = Math.max(shake, 0.05 * (1 - dist / 14));
+}
+const blastLight = new THREE.PointLight(0xffa050, 0, 16, 2); scene.add(blastLight);
+let shake = 0;
+const smokes = [];   // { g, t, life }
+function addSmoke(p, life) {
+  const g = new THREE.Group();
+  for (let i = 0; i < 22; i++) {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: i % 2 ? 0xc6c9c4 : 0xa9ada8, transparent: true, depthWrite: false, rotation: Math.random() * 6 }));
+    const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * 2.3;
+    m.userData = { x: Math.cos(a) * r, y: rnd(0.3, 2.6), z: Math.sin(a) * r, s: rnd(2.6, 3.8), w: rnd(-0.15, 0.15) };
+    g.add(m);
+  }
+  g.position.set(p.x, p.y, p.z); scene.add(g);
+  smokes.push({ g, t: 0, life });
+}
+function clearThrown() {
+  for (const id of [...nades.keys()]) nadeGone(id);
+  for (const s of smokes.splice(0)) { scene.remove(s.g); for (const m of s.g.children) m.material.dispose(); }
+}
+function updateThrown(dt) {
+  for (const [id, q] of nades) {
+    for (q.acc += dt; q.acc >= NADE_DT; q.acc -= NADE_DT) stepNade(q.n, NADE_DT, BOXES);
+    q.g.position.set(q.n.x, q.n.y, q.n.z);
+    const v = Math.hypot(q.n.vx, q.n.vz); q.g.rotation.x += v * dt * 1.4; q.g.rotation.z += v * dt * 0.7;
+    if ((q.left -= dt) <= 0) nadeGone(id);   // its end was missed
+  }
+  for (let i = smokes.length - 1; i >= 0; i--) {
+    const s = smokes[i]; s.t += dt;
+    const grow = Math.min(1, s.t / 1.1), k = 0.35 + 0.65 * (1 - (1 - grow) ** 2), fade = Math.min(1, grow * 1.5, Math.max(0, (s.life - s.t) / 2));
+    for (const m of s.g.children) { const u = m.userData; m.position.set(u.x * k, u.y * k, u.z * k); m.scale.setScalar(u.s * k); m.material.opacity = 0.85 * fade; m.material.rotation += u.w * dt; }
+    if (s.t >= s.life) { scene.remove(s.g); for (const m of s.g.children) m.material.dispose(); smokes.splice(i, 1); }
+  }
+  blastLight.intensity *= 1 - Math.min(1, dt * 12);
+  shake = Math.max(0, shake - dt * 0.12);
+}
+
 /* ---------------- audio ---------------- */
 let AC = null, master = null, nbuf = null;
 function audio() {
@@ -452,7 +418,7 @@ function shotSfx(w, dist = 0, pan = 0) {
   if (!AC) return;
   const t = AC.currentTime, v = 1 / (1 + dist * 0.06), P = AC.createStereoPanner();
   P.pan.value = clamp(pan, -1, 1); P.connect(master);
-  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (WEAPONS[w]?.heavy ? 2600 : w === 'pistol' ? 4200 : 3400) / (1 + dist * 0.03);
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (WEAPONS[w]?.heavy ? 2600 : WEAPONS[w]?.slot === 2 ? 4200 : 3400) / (1 + dist * 0.03);
   const s = AC.createBufferSource(); s.buffer = nbuf;
   const g = AC.createGain(), dur = w === 'sniper' ? 0.55 : WEAPONS[w]?.heavy ? 0.28 : 0.18;
   g.gain.setValueAtTime(0.55 * v, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
@@ -476,10 +442,12 @@ function noiseSfx(d, f, v, at = 0) {
 }
 
 /* ---------------- game state ---------------- */
+let profile = loadProfile();
+const kit = () => activeKit(profile);
 let net = null, inGame = false, myId = 0, myTeam = 'red', roster = new Map(), snaps = [], offEst = null;
 const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0 };
-let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
-let lo = isPrimary(store.get('hanpan-lo', 'rifle')) ? store.get('hanpan-lo', 'rifle') : 'rifle', cur = lo, switchT = 0;
+let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', eq: 0, al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
+let act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }, cur = act.lo, switchT = 0;   // what I carry right now; set by the server at each spawn
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
 let reloadT = 0, reloadDur = 1, shotTimes = [], deathAt = null, killer = 0, wasAlive = true, stepAcc = 0, inputAcc = 0, lastHurt = 0;
@@ -552,8 +520,8 @@ function paintMutes() {
 
 function onMsg(m) {
   switch (m.t) {
-    case 'welcome': loadMap(m.map); if (isPrimary(m.lo) && m.lo !== lo) { cur = lo = m.lo; paintLo(); } myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; break;
+    case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -570,10 +538,13 @@ function onMsg(m) {
     case 'k': onKill(m); break;
     case 'rl': reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
     case 'end': showEnd(m); break;
-    case 'start': setText('center', ''); break;
+    case 'start': clearThrown(); setText('center', ''); break;
     case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
     case 'c': if (!muted.has(m.id)) chatLine(pname(m.id), String(m.x), m.id === myId ? 'me' : ''); break;
     case 'cx': chatLine('', 'You are sending messages too fast.', 'sys'); break;
+    case 'gt': nadeThrown(m); break;
+    case 'gx': nadeBurst(m); break;
+    case 'heal': blip(520, 0.12, 0.08, 'triangle'); blip(700, 0.16, 0.08, 'triangle', 0.12); break;
     case 'pi': send({ t: 'po', s: m.s }); break;
   }
 }
@@ -593,15 +564,27 @@ function onSnap(m) {
     if (a[0] === myId) continue;
     const team = a[9] ? 'blue' : 'red';
     let o = others.get(a[0]);
-    if (o && o.team !== team) { scene.remove(o.g); o = null; }
+    const gear = roster.get(a[0])?.g || '';
+    if (o && (o.team !== team || o.gear !== gear)) { dropSoldier(a[0]); o = null; }
     if (!o) {
-      const g = makeSoldier(team);
-      o = { g, team, walk: 0, px: a[1], pz: a[3], tag: null, dead: 0, s: { x: a[1], y: a[2], z: a[3], yaw: a[4], pitch: a[5], cr: a[6], alive: a[7] } };
+      const g = makeSoldier(team, unpackGear(gear), a[8]);
+      o = { g, team, gear, walk: 0, px: a[1], pz: a[3], tag: null, dead: 0, s: { x: a[1], y: a[2], z: a[3], yaw: a[4], pitch: a[5], cr: a[6], alive: a[7] } };
       scene.add(g); others.set(a[0], o);
     }
+    setWeapon(o.g, a[8]);
   }
-  for (const [id, o] of others) if (!map.has(id)) { scene.remove(o.g); others.delete(id); }
+  for (const id of others.keys()) if (!map.has(id)) dropSoldier(id);
 }
+
+function dropSoldier(id) {
+  const o = others.get(id);
+  if (!o) return;
+  scene.remove(o.g);
+  if (o.tag) { o.g.remove(o.tag); o.tag.material.map.dispose(); o.tag.material.dispose(); }
+  disposeSoldier(o.g);
+  others.delete(id);
+}
+function dropSoldiers() { for (const id of [...others.keys()]) dropSoldier(id); }
 
 function interpRemotes(dt) {
   if (snaps.length < 2 || offEst == null) return;
@@ -668,7 +651,7 @@ function tryFire() {
   bloom = Math.min(W.spread.max, bloom + W.spread.bloom);
   const kv = W.recoil.v * (1 - 0.4 * adsT) * (me.cr ? 0.8 : 1);
   me.pitch = clamp(me.pitch + kv, -1.5, 1.5); me.yaw += gauss() * W.recoil.h; recoilDebt += kv * 0.55;
-  const hard = cur === 'sniper' || cur === 'shotgun';
+  const hard = W.recoil.v >= 0.045;
   kick.z = hard ? 0.12 : 0.05; kick.r = hard ? 0.18 : 0.07;
   muzzle.visible = !(W.scope && adsT > 0.9); muzzle.material.rotation = Math.random() * 6; muzzle.userData.t = 0.045;
   flashLight.intensity = 6; vmFlashLight.intensity = 2;
@@ -681,7 +664,7 @@ function tryFire() {
     let tt = rayMap(o, d, BOXES, W.range, n), victim = false;
     for (const [, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; } }
     const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
-    if (cur !== 'pistol' || Math.random() < 0.5) tracer(from, end);
+    if (W.slot === 1 || Math.random() < 0.5) tracer(from, end);
     if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range) impact(end, n);
   }
 }
@@ -714,15 +697,21 @@ function onKill(m) {
   const row = document.createElement('div');
   if (m.k === myId || m.v === myId) row.className = 'me';
   const a = document.createElement('span'); a.className = kp?.tm === 'red' ? 'r' : 'b'; a.textContent = kp ? kp.n : '';
-  const w = document.createElement('em'); w.textContent = (WEAPONS[m.w]?.name || '') + (m.hs ? ' · headshot' : '');
+  const w = document.createElement('em'); w.textContent = (WEAPONS[m.w]?.name || EQUIP[m.w]?.name || '') + (m.hs ? ' · headshot' : '');
   const b = document.createElement('span'); b.className = vp_?.tm === 'red' ? 'r' : 'b'; b.textContent = vp_ ? vp_.n : '';
   row.append(a, w, b);
   const feed = $('feed'); feed.prepend(row); while (feed.children.length > 6) feed.lastChild.remove();
   setTimeout(() => row.remove(), 6000);
+  if (net?.online) {
+    if (m.v === myId) addRecord({ deaths: 1 });
+    else if (m.k === myId) addRecord({ kills: 1, heads: m.hs ? 1 : 0 });
+  }
   if (m.v === myId) { deathAt = { x: me.x, y: me.y + eyeH, z: me.z }; killer = m.k; noiseSfx(0.4, 300, 0.3); }
 }
 function showEnd(m) {
   const mine = m.winner === myTeam, c = $('center');
+  if (net?.online) addRecord({ matches: 1, wins: mine ? 1 : 0 });
+  for (const id of [...nades.keys()]) nadeGone(id);
   c.textContent = ''; hudCache.center = null;
   const b = document.createElement('span'); b.className = 'big';
   b.textContent = m.winner === 'draw' ? 'DRAW' : mine ? 'VICTORY' : 'DEFEAT';
@@ -769,14 +758,16 @@ function drawMini() {
 
 /* ---------------- input ---------------- */
 addEventListener('keydown', e => {
-  if (!inGame || document.activeElement?.tagName === 'INPUT') return;
+  if (!inGame || ['INPUT', 'SELECT'].includes(document.activeElement?.tagName)) return;
   if ((e.code === 'Enter' || e.code === 'NumpadEnter') && $('pauseOv').hidden) { e.preventDefault(); openChat(); return; }
   if (e.code === 'KeyV' && !e.repeat) talkKey();
   K[e.code] = true;
   if (e.code === 'Tab') { e.preventDefault(); renderBoard(); $('board').hidden = false; }
   if (e.code === 'KeyR') send({ t: 'r' });
-  if (e.code === 'Digit1' && cur !== lo) { cur = lo; switchT = nowS(); reloadT = 0; send({ t: 'w', w: lo }); }
-  if (e.code === 'Digit2' && cur !== 'pistol') { cur = 'pistol'; switchT = nowS(); reloadT = 0; send({ t: 'w', w: 'pistol' }); }
+  if (e.code === 'KeyG' && !e.repeat && srv.al) send({ t: 'g', yaw: me.yaw, pitch: me.pitch });
+  for (const [key, w] of [['Digit1', act.lo], ['Digit2', act.sa]]) {
+    if (e.code === key && cur !== w) { cur = w; switchT = nowS(); reloadT = 0; send({ t: 'w', w }); }
+  }
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', e => { K[e.code] = false; if (e.code === 'KeyV') voice.stop(); if (e.code === 'Tab') $('board').hidden = true; });
@@ -813,29 +804,48 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('pointerlockerror', () => { lockFailed = true; $('pauseOv').hidden = true; });
 
 /* ---------------- menu ---------------- */
-$('nameIn').value = store.get('hanpan-name', 'Recruit' + Math.floor(Math.random() * 900 + 100));
+$('nameIn').value = loadName();
 const sensIn = $('sensIn'); sensIn.value = sens; $('sensOut').textContent = sens.toFixed(1);
 sensIn.oninput = () => { sens = +sensIn.value; $('sensOut').textContent = sens.toFixed(1); store.set('hanpan-sens', sens); };
 $('voiceOn').checked = voiceOn;
 $('voiceOn').onchange = () => { voiceOn = $('voiceOn').checked; store.set('hanpan-voice', voiceOn ? '1' : '0'); };
 let owned = new Set();
 const locked = product => !!product && !owned.has(product);
-for (const id of PRIMARIES) {
-  const b = document.createElement('button');
-  b.type = 'button'; b.dataset.lo = id; b.append(WEAPONS[id].name);
-  if (WEAPONS[id].product) { const s = document.createElement('small'); b.append(s); }
-  $('loSeg').append(b);
+// The same weapon choices are in the main menu and on the pause screen.
+const PICKS = { lo: PRIMARIES, sa: SIDEARMS, eq: Object.keys(EQUIP) };
+for (const s of document.querySelectorAll('select[data-pick]')) {
+  for (const id of PICKS[s.dataset.pick]) { const o = document.createElement('option'); o.value = id; s.append(o); }
+  s.onchange = () => {
+    kit()[s.dataset.pick] = s.value; saveProfile(profile); paintLo();
+    if (inGame) { send({ t: 'lo', lo: kit().lo, sa: kit().sa, eq: kit().eq }); setText('kitNote', 'You get this at your next spawn.'); }
+  };
 }
 function paintLo() {
-  for (const b of $('loSeg').children) {
-    b.setAttribute('aria-pressed', b.dataset.lo === lo);
-    const s = b.querySelector('small'), no = locked(WEAPONS[b.dataset.lo].product);
-    b.classList.toggle('locked', no);
-    if (s) s.textContent = no ? 'Locked' : 'Owned';
+  for (const s of document.querySelectorAll('select[data-pick]')) {
+    for (const o of s.options) {
+      const item = WEAPONS[o.value] || EQUIP[o.value];
+      o.textContent = item.name + (locked(item.product) ? ' (locked online)' : '');
+      o.disabled = inGame && !!net?.online && locked(item.product);
+    }
+    s.value = kit()[s.dataset.pick];
   }
+  $('kitSeg').replaceChildren(...profile.kits.map((k, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = 'Kit ' + (i + 1); b.setAttribute('aria-pressed', i === profile.active);
+    b.onclick = () => { profile.active = i; saveProfile(profile); paintLo(); paintPortrait(); $('kitSeg').children[i].focus(); };
+    return b;
+  }));
 }
-$('loSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; lo = b.dataset.lo; store.set('hanpan-lo', lo); paintLo(); };
+function paintPortrait() {
+  try {
+    const m = makeSoldier('red', kit().gear, kit().lo);
+    snap($('portrait'), m, { view: 'bust' });
+    disposeSoldier(m); closeStudio();
+  } catch (e) { console.warn('[portrait]', e); }
+}
 paintLo();
+paintPortrait();
+addEventListener('pageshow', e => { if (e.persisted) { profile = loadProfile(); $('nameIn').value = loadName(); paintLo(); paintPortrait(); } });
 let land = store.get('hanpan-land', DEFAULT_MAP);
 if (land !== 'any' && !isMap(land)) land = DEFAULT_MAP;
 for (const { id, name, desc, product } of [...MAP_LIST, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
@@ -867,7 +877,9 @@ function paintAccount(user) {
   shop.href = 'store.html'; shop.textContent = 'Store'; shop.className = 'shop';
   const chat = document.createElement('a');
   chat.href = 'servers.html'; chat.textContent = 'Servers'; chat.className = 'shop';
-  box.append(shop, chat);
+  const char = document.createElement('a');
+  char.href = 'character.html'; char.textContent = 'Character'; char.className = 'shop';
+  box.append(char, shop, chat);
   const a = document.createElement('a');
   a.href = 'login.html';
   if (user) { const w = walletOf(user); a.textContent = shortWallet(w); a.title = 'Signed in as ' + w; } else a.textContent = 'Log in with wallet';
@@ -881,34 +893,34 @@ function paintAccount(user) {
   box.append(out);
 }
 if (maybeSignedIn()) currentUser().then(paintAccount, () => paintAccount(null)); else paintAccount(null);
-function playerName() { const n = cleanName($('nameIn').value); store.set('hanpan-name', n); return n; }
+function playerName() { const n = cleanName($('nameIn').value); saveName(n); return n; }
 
 function enterGame() {
   inGame = true; $('menu').hidden = true; $('hud').hidden = false; status('');
   muted.clear(); $('chatLog').textContent = ''; if (document.activeElement) document.activeElement.blur();
   chatLine('', voiceOn && net?.sendBin ? 'Hold V to talk to your team. Enter for team chat.' : 'Press Enter for team chat.', 'sys');
-  snaps = []; offEst = null; cur = lo; wasAlive = true; deathAt = null;
-  for (const [, o] of others) scene.remove(o.g); others.clear();
+  snaps = []; offEst = null; act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }; cur = act.lo; wasAlive = true; deathAt = null; roster = new Map();
+  dropSoldiers(); clearThrown(); paintLo(); hudCache.kitNote = null; setText('kitNote', '');
 }
 function leaveGame(msg = '') {
   voice.close(); closeChat();
   if (net) { const n = net; net = null; n.close(); }
   inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
-  for (const [, o] of others) scene.remove(o.g); others.clear();
+  dropSoldiers(); clearThrown(); paintLo();
 }
 $('practice').onclick = () => {
   audio(); lock();
   const room = new Room({ id: 'practice', minPlayers: 8, map: land === 'any' ? randomMap(owned) : land });
   let live = true;
-  const id = room.addPlayer(playerName(), lo, m => queueMicrotask(() => live && onMsg(m)), 'all');   // practice: try everything
+  const id = room.addPlayer(playerName(), kit().lo, m => queueMicrotask(() => live && onMsg(m)), 'all', null, { sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear) });   // practice: try everything
   const timer = setInterval(() => room.update(1 / 30), 1000 / 30);
   net = { send: m => room.onMessage(id, m), close() { live = false; clearInterval(timer); } };
   enterGame();
 };
 // Say what is locked instead of silently changing the player's choice.
 function needsStore() {
-  const what = land !== 'any' && !canPlay(land, owned) ? getMap(land).name : locked(WEAPONS[lo].product) ? WEAPONS[lo].name : null;
+  const what = land !== 'any' && !canPlay(land, owned) ? getMap(land).name : [kit().lo, kit().sa].map(id => WEAPONS[id]).find(w => locked(w.product))?.name;
   if (!what) return false;
   status('');
   const a = document.createElement('a');
@@ -932,8 +944,8 @@ $('online').onclick = async () => {
   const to = setTimeout(() => { if (!opened) { ws.close(); status('No game server found at this address. Try Practice, or deploy the server.'); if (document.pointerLockElement) document.exitPointerLock(); } }, 4000);
   ws.onopen = () => {
     opened = true; clearTimeout(to);
-    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo, map: land, token: token || undefined }));
-    net = mine = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, sendBin: b => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(b); }, close: () => ws.close() };
+    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo: kit().lo, sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear), map: land, token: token || undefined }));
+    net = mine = { online: true, send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, sendBin: b => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(b); }, close: () => ws.close() };
     enterGame();
   };
   ws.binaryType = 'arraybuffer';
@@ -941,7 +953,7 @@ $('online').onclick = async () => {
   ws.onclose = () => { if (inGame && mine && net === mine) leaveGame('Disconnected from the server.'); };
   ws.onerror = () => {};
 };
-$('resume').onclick = () => lock();
+$('resume').onclick = () => { $('resume').blur(); lock(); };
 $('leave').onclick = () => leaveGame();
 
 /* ---------------- frame ---------------- */
@@ -955,9 +967,10 @@ const fmtT = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 let last = nowS(), menuA = 0;
 function frame() {
   requestAnimationFrame(frame);
-  const t = nowS(), dt = Math.min(0.05, t - last); last = t;
+  const t = nowS(), real = Math.min(1, t - last), dt = Math.min(0.05, real); last = t;
   updateFx(dt);
   if (inGame) {
+    updateThrown(real);   // grenades keep server time even on a slow screen
     updateLocal(dt, t);
     interpRemotes(dt);
     updateHud(dt, t);
@@ -983,7 +996,7 @@ function updateLocal(dt, t) {
     const wantCr = !!K.KeyC;
     me.cr = wantCr || (me.cr && !!hits(me.x, me.y, me.z, PHYS.h, BOXES));
     const sprint = K.ShiftLeft && f > 0 && !me.cr && !ads && !trigger;
-    const speed = me.cr ? PHYS.crouch : ads ? PHYS.ads * (cur === 'pistol' ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
+    const speed = me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
     if (K.Space && me.ground) { me.vy = PHYS.jump; me.ground = false; }
     step(me, ix, iz, speed, dt, BOXES);
     eyeH += ((me.cr ? PHYS.eyec : PHYS.eye) - eyeH) * Math.min(1, dt * 12);
@@ -1000,7 +1013,7 @@ function updateLocal(dt, t) {
       send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr ? 1 : 0 });
     }
     cam.position.set(me.x, me.y + eyeH + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z);
-    cam.rotation.set(me.pitch, me.yaw, Math.sin(bobT) * 0.004);
+    cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004);
   } else if (deathAt) {
     adsT = 0; trigger = false;
     const k = others.get(killer);
@@ -1024,7 +1037,7 @@ function updateLocal(dt, t) {
     vm.g.position.z += kick.z;
     vm.g.rotation.set(kick.r + rl * 0.7, -sway.x * 2 * bob + rl * 0.3, -rl * 0.25);
     muzzle.position.copy(vm.muzzle).applyEuler(vm.g.rotation).add(vm.g.position);
-    muzzle.scale.setScalar(cur === 'pistol' ? 0.12 : 0.2);
+    muzzle.scale.setScalar(W.slot === 2 ? 0.12 : 0.2);
   }
   if (muzzle.visible && (muzzle.userData.t -= dt) <= 0) muzzle.visible = false;
   flashLight.position.copy(cam.position); flashLight.intensity *= 1 - Math.min(1, dt * 30); vmFlashLight.intensity *= 1 - Math.min(1, dt * 30);
@@ -1039,6 +1052,11 @@ function updateHud(dt, t) {
   $('hpB').style.background = srv.hp > 35 ? '#7fd36b' : '#e5533d';
   setText('wName', W.name); setText('ammoN', ammoShown()); setText('resN', '/ ' + srv.r);
   $('rlB').style.width = reloadT > 0 ? (1 - reloadT / reloadDur) * 100 + '%' : '0';
+  const E = EQUIP[act.eq];
+  setText('eqN', E.name + ' × ' + srv.eq + '  [G]'); $('eqN').classList.toggle('out', !srv.eq);
+  let danger = false;
+  for (const q of nades.values()) if (q.w === 'frag' && (q.tm !== myTeam || q.by === myId) && Math.hypot(q.n.x - me.x, q.n.z - me.z) < EQUIP.frag.radius) danger = true;
+  $('nadeWarn').hidden = !danger || !srv.al;
   setText('net', `${MAP.name}\nping ${srv.pg} ms`);
   const gap = 4 + curSpread() / Math.tan(cam.fov * Math.PI / 360) * innerHeight / 2;
   const cr = $('cross');
@@ -1050,7 +1068,7 @@ function updateHud(dt, t) {
   vignT = Math.max(0, vignT - dt); $('vign').style.opacity = Math.max(vignT, srv.al && srv.hp < 35 ? 0.35 : 0);
   $('scope').style.display = W.scope && adsT > 0.9 && srv.al ? 'block' : 'none';
   if (!srv.al && phase === 'play') {
-    setText('center', `Eliminated by ${pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
+    setText('center', `${killer === myId ? 'Caught by your own grenade' : 'Eliminated by ' + pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
   } else if (srv.al && srv.pr && phase === 'play') setText('center', 'Spawn protection');
   else if (phase === 'play') setText('center', '');
 }
