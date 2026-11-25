@@ -17,7 +17,7 @@ const MAX_PER_ROOM = +process.env.MAX_PER_ROOM || 12;   // humans per room
 const MIN_PLAYERS = +process.env.MIN_PLAYERS || 6;      // bots fill rooms up to this size
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg',
 };
 
 // Real city lands: a missing or broken file only takes that land away.
@@ -41,6 +41,7 @@ const server = http.createServer((req, res) => {
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     const headers = { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' };
+    if (path.extname(file) === '.mp3') headers['cache-control'] = 'public, max-age=86400';   // the voices are the biggest files here
     if (['login.html', 'servers.html'].includes(path.basename(file))) headers['x-frame-options'] = 'DENY';   // no hidden overlays on the wallet login or chat
     if (path.extname(file) === '.json' && data.length > 8192 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
       headers['content-encoding'] = 'gzip'; headers.vary = 'accept-encoding';

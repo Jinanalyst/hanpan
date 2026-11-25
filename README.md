@@ -146,6 +146,7 @@ public/models.js         모델링 도구, 위장 무늬, 메시 합치기
 public/studio.js         카드와 메뉴에 쓰는 정지 그림
 public/shared/gear.js    외형 목록과 코드 변환 (새 항목은 반드시 맨 뒤에 추가)
 public/voice.js          팀 음성(녹음·재생), voice-worklet.js는 마이크 처리
+public/battle.js         전투 소리(병사 외침, 무전, 먼 총성·폭발), voicelines.js는 대사 위치, sounds/는 이 게임용으로 생성한 목소리
 public/shared/adpcm.js   음성 압축 (말하는 사람당 약 8KB/s)
 public/floorplan.js      전장 미니 평면도
 server/owned.js          플레이어가 가진 상품 조회 (비밀 키 불필요)

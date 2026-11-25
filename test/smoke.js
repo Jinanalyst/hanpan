@@ -552,4 +552,16 @@ assert.ok(MAP_IDS.includes(randomMap()) || REAL.some(c => c.id === randomMap()))
 function readShopWords() { return JSON.parse(fs.readFileSync(new URL('../tools/osm/shops.json', import.meta.url))).categories; }
 function wallDist(x, z, a, b) { const dx = b[0] - a[0], dz = b[1] - a[1], k = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1))); return Math.hypot(x - a[0] - dx * k, z - a[1] - dz * k); }
 
+// Battle voices: every file is there and every line is inside its file
+{
+  const { VOICES, LINES } = await import('../public/voicelines.js'), { clampVolume } = await import('../public/battle.js');
+  const bytes = VOICES.map(v => fs.statSync(new URL('../public/' + v.file, import.meta.url)).size);
+  assert.ok(bytes.reduce((a, b) => a + b) < 1.2e6, 'voices stay a small download');
+  for (const kind of ['reload', 'frag', 'grenade', 'contact', 'kill', 'mandown', 'start', 'order', 'hurt', 'death']) VOICES.forEach((v, i) => assert.ok(v.extra || LINES[kind].some(l => l[0] === i), v.file + ': ' + kind));
+  for (const kind of ['radio', 'radiokill', 'radiolost', 'far']) assert.ok(LINES[kind].length >= 2, kind);
+  for (const kind in LINES) for (const [v, at, len] of LINES[kind]) assert.ok(len > 0.2 && len < 3.2 && at >= 0 && at + len < bytes[v] * 8 / 48000 + 0.05, kind + ' is inside ' + VOICES[v].file);   // 48 kbit/s
+  assert.deepEqual([null, '', 'x', '0', '0.35', 7, -1].map(clampVolume), [0.7, 0.7, 0.7, 0, 0.35, 1, 0]);
+  console.log('ok  battle voices: ' + VOICES.length + ' files, ' + Object.values(LINES).flat().length + ' lines, ' + Math.round(bytes.reduce((a, b) => a + b) / 1024) + ' KB');
+}
+
 console.log('all smoke tests passed');

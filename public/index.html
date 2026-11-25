@@ -61,6 +61,8 @@
     <label class="check"><input id="voiceOn" type="checkbox"> Team voice (hold V to talk)</label>
     <label for="sensIn">Mouse sensitivity <output id="sensOut"></output></label>
     <input id="sensIn" type="range" min="0.5" max="3" step="0.1">
+    <label for="battleIn">Battle sounds and voices <output data-battle></output></label>
+    <input id="battleIn" data-battle type="range" min="0" max="100" step="5">
     <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button><p id="status" role="status"></p></div>
     <details><summary>Controls</summary>
       <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump or stand up</li>
@@ -84,6 +86,8 @@
       <label>Equipment<select data-pick="eq"></select></label>
     </div>
     <p id="kitNote" role="status"></p>
+    <label for="battleIn2">Battle sounds and voices <output data-battle></output></label>
+    <input id="battleIn2" data-battle type="range" min="0" max="100" step="5">
     <div id="mutes" hidden><h3>Teammates</h3><ul></ul></div>
     <div class="go"><button id="resume" class="primary">Resume</button><button id="leave">Leave match</button></div>
   </div>

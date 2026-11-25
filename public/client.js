@@ -13,6 +13,7 @@ import { cityMat, isCityKind, drawCityBox, cityWall, cityRing, landmark, mergeSt
 import { loadCity, buildCity, attribution } from './osmcity.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
+import { createBattle, clampVolume } from './battle.js';
 import { Room, cleanName } from './shared/game.js';
 import { configured, currentUser, maybeSignedIn, signOut, accessToken, ownedProducts, walletOf, shortWallet } from './auth.js';
 
@@ -618,6 +619,11 @@ function send(m) { if (net) net.send(m); }
 const muted = new Set();   // player ids silenced by me, for voice and chat
 let voiceOn = store.get('hanpan-voice', '1') === '1';
 const voice = createVoice({ sendFrame: f => net?.sendBin?.(f), allowed: id => voiceOn && !muted.has(id) && roster.get(id)?.tm === myTeam });
+const battle = createBattle({
+  audio: () => AC && { AC, master },
+  blocked(a, b) { const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d); return l > 1 && rayMap(a, d.map(v => v / l), BOXES, l) < l - 0.3; },
+});
+battle.volume = clampVolume(store.get('hanpan-battle', null));
 let chatOpen = false;
 function chatLine(name, text, cls) {
   const row = document.createElement('div');
@@ -702,13 +708,13 @@ function onMsg(m) {
     case 'hit': showHit(m); break;
     case 'dmg': showDmg(m); break;
     case 'k': onKill(m); break;
-    case 'rl': reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
+    case 'rl': battle.reload(); reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
     case 'end': showEnd(m); break;
-    case 'start': clearThrown(); setText('center', ''); break;
+    case 'start': battle.start(); clearThrown(); setText('center', ''); break;
     case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
     case 'c': if (!muted.has(m.id)) chatLine(pname(m.id), String(m.x), m.id === myId ? 'me' : ''); break;
     case 'cx': chatLine('', 'You are sending messages too fast.', 'sys'); break;
-    case 'gt': nadeThrown(m); if (m.st) nadeStuck({ id: m.id, p: m.o }); break;
+    case 'gt': battle.thrown(m); nadeThrown(m); if (m.st) nadeStuck({ id: m.id, p: m.o }); break;
     case 'gs': nadeStuck(m); break;
     case 'gx': nadeBurst(m); break;
     case 'fl': blindMax = Math.max(blindEnd - nowS(), m.s); blindEnd = nowS() + blindMax; blip(3200, Math.min(2.5, m.s), 0.06, 'sine'); stopAiming(); break;
@@ -864,7 +870,7 @@ function tryFire() {
   for (let i = 0; i < (W.pellets || 1); i++) {
     if (W.pellets) d.splice(0, 3, ...dirFrom(yaw + rnd(-W.pelletSpread, W.pelletSpread), pitch + rnd(-W.pelletSpread, W.pelletSpread)));
     let tt = rayMap(o, d, BOXES, W.range, n), victim = false;
-    for (const [, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; } }
+    for (const [id, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; aimedAt = id; aimedT = t; } }
     const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
     if (W.slot === 1 || Math.random() < 0.5) tracer(from, end);
     if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range) impact(end, n);
@@ -873,6 +879,7 @@ function tryFire() {
 function remoteShot(m) {
   const o = new THREE.Vector3(...m.o), e = new THREE.Vector3(...m.e);
   const q = others.get(m.id);
+  battle.shot(m, WEAPONS[m.w]);
   if (q) { const l = leanOff(q.s); o.set(q.s.x + l.x, q.s.y + [1.4, 1, 0.4][q.s.cr] + l.y, q.s.z + l.z); q.lastShot = nowS(); }
   tracer(o, e);
   if (!m.hit) impact(e, null);
@@ -882,19 +889,22 @@ function remoteShot(m) {
 }
 
 /* ---------------- HUD events ---------------- */
-let hitT = 0, dmgT = 0, vignT = 0;
+let hitT = 0, dmgT = 0, vignT = 0, aimedAt = 0, aimedT = 0;   // the last enemy a bullet of mine seemed to reach, and when
 function showHit(m) {
   const h = $('hitm'); h.className = m.kill ? 'kill' : ''; hitT = 0.22;
   blip(m.head ? 2400 : 1700, 0.05, 0.08);
+  if (!m.kill && nowS() - aimedT < 0.5) battle.hitEnemy(aimedAt);
   if (m.kill) { blip(880, 0.08, 0.1, 'triangle', 0.06); blip(1320, 0.12, 0.1, 'triangle', 0.14); }
 }
 function showDmg(m) {
   const rel = wrapA(Math.atan2(-(m.from[0] - me.x), -(m.from[1] - me.z)) - me.yaw);
   $('dmgdir').style.transform = `rotate(${-rel}rad)`; dmgT = 1; vignT = 0.6; lastHurt = nowS();
+  if (m.hp > 0) battle.hurt();
   noiseSfx(0.12, 600, 0.25);
 }
 const pname = id => roster.get(id)?.n || 'Unknown';
 function onKill(m) {
+  battle.kill(m);
   const kp = roster.get(m.k), vp_ = roster.get(m.v);
   const row = document.createElement('div');
   if (m.k === myId || m.v === myId) row.className = 'me';
@@ -912,6 +922,7 @@ function onKill(m) {
 }
 function showEnd(m) {
   const mine = m.winner === myTeam, c = $('center');
+  battle.end();
   if (net?.online) addRecord({ matches: 1, wins: mine ? 1 : 0 });
   for (const id of [...nades.keys()]) nadeGone(id);
   c.textContent = ''; hudCache.center = null;
@@ -1154,6 +1165,14 @@ $('holdKneel').checked = holdKneel;
 $('holdKneel').onchange = () => { holdKneel = $('holdKneel').checked; store.set('hanpan-hold', holdKneel ? '1' : '0'); };
 $('voiceOn').checked = voiceOn;
 $('voiceOn').onchange = () => { voiceOn = $('voiceOn').checked; store.set('hanpan-voice', voiceOn ? '1' : '0'); };
+// Battle sounds: the same slider is in the main menu and on the pause screen.
+function paintBattle() {
+  const n = Math.round(battle.volume * 100);
+  for (const i of document.querySelectorAll('input[data-battle]')) i.value = n;
+  for (const o of document.querySelectorAll('output[data-battle]')) o.textContent = n ? n + '%' : 'Off';
+}
+for (const i of document.querySelectorAll('input[data-battle]')) i.oninput = () => { battle.volume = i.value / 100; store.set('hanpan-battle', battle.volume); paintBattle(); };
+paintBattle();
 let owned = new Set();
 const locked = product => !!product && !owned.has(product);
 // The same weapon choices are in the main menu and on the pause screen.
@@ -1256,10 +1275,11 @@ function enterGame() {
   muted.clear(); $('chatLog').textContent = ''; if (document.activeElement) document.activeElement.blur();
   chatLine('', voiceOn && net?.sendBin ? 'Hold V to talk to your team. Enter for team chat.' : 'Press Enter for team chat.', 'sys');
   snaps = []; offEst = null; act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }; cur = act.lo; wasAlive = true; deathAt = null; roster = new Map();
+  battle.reset(); battle.start();
   dropSoldiers(); clearThrown(); paintLo(); hudCache.kitNote = null; setText('kitNote', '');
 }
 function leaveGame(msg = '') {
-  voice.close(); closeChat(); held = null;
+  voice.close(); closeChat(); held = null; battle.reset();
   if (net) { const n = net; net = null; n.close(); }
   inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
@@ -1350,6 +1370,7 @@ function frame() {
     else { cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0); }
     cam.fov = 60; cam.updateProjectionMatrix();
   }
+  battle.update({ play: inGame && phase === 'play' && !held && snaps.length > 1, paused: !$('pauseOv').hidden, talk: voice.talking || voice.speakers().some(allowedSpeaker), cam, myId, myTeam, others });
   if (warming && !warming.drawable) return;   // the last picture stays until the new land can be drawn without stopping
   updateAir(dt);
   if (MAP.city) fitShadow(true);
@@ -1445,6 +1466,7 @@ function updateHud(dt, t) {
   let danger = false;
   for (const f of fires) if (Math.hypot(f.g.position.x - me.x, f.g.position.z - me.z) < EQUIP.fire.radius + 0.5) danger = true;
   for (const q of nades.values()) if ((q.w === 'frag' || (q.w === 'charge' && q.by !== myId)) && (q.tm !== myTeam || q.by === myId) && Math.hypot(q.n.x - me.x, q.n.z - me.z) < EQUIP.frag.radius) danger = true;
+  if (danger && srv.al && $('nadeWarn').hidden) battle.danger();
   $('nadeWarn').hidden = !danger || !srv.al;
   setText('net', `${MAP.name}\nping ${srv.pg} ms`);
   const gap = 4 + curSpread() / Math.tan(cam.fov * Math.PI / 360) * innerHeight / 2;
