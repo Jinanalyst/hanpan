@@ -92,7 +92,7 @@ export function createVoice({ sendFrame, allowed }) {
 
   return {
     start, stop, close, receive,
-    ready: output,                                         // call from a click so the browser allows sound
+    ready() { const c = output(); if (c.state === 'suspended') c.resume().catch(() => {}); },                                         // call from a click so the browser allows sound
     get state() { return state; },
     get talking() { return want && state === 'live'; },
     speakers() { const t = performance.now(); return [...talkers].filter(([, k]) => t - k.heard < 350).map(([id]) => id); },

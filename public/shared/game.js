@@ -479,7 +479,7 @@ export class Room {
     this.pingAcc += dt;
     if (this.pingAcc > 2) { this.pingAcc = 0; for (const p of this.players.values()) if (!p.bot) p.send({ t: 'pi', s: t }); }
     this.snapAcc += dt;
-    if (this.snapAcc >= SNAP_RATE) { this.snapAcc = 0; this.snapshot(t); }
+    if (this.snapAcc >= SNAP_RATE) { this.snapAcc %= SNAP_RATE; this.snapshot(t); }   // keeps the remainder, or a 30 a second tick would only give 15
   }
 
   snapshot(t) {

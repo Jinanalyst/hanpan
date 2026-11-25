@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 
 const geoCache = new Map();
-const cached = (key, make) => { let g = geoCache.get(key); if (!g) { g = make(); geoCache.set(key, g); } return g; };
+const cached = (key, make) => { let g = geoCache.get(key); if (!g) { g = make(); g.userData.shared = true; geoCache.set(key, g); } return g; };
 
 export const boxG = (w, h, d, r = 0) => cached(`b${w},${h},${d},${r}`, () => {
   if (!r) return new THREE.BoxGeometry(w, h, d);
@@ -119,61 +119,68 @@ PLAIN.onBeforeCompile = s => {
 };
 const isPlain = m => m?.isMeshStandardMaterial && !m.map && !m.transparent && m.side === THREE.FrontSide && !m.vertexColors;
 // Replaces the direct children of a group (and their children) with one mesh per material. Groups marked keep stay.
-const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), N = new THREE.Vector3(), nm = new THREE.Matrix3();
+// This runs whenever a soldier appears, in the middle of a match, so it makes as little garbage as it can.
+const nm = new THREE.Matrix3();
 export function bake(g, shadow = true) {
-  const bins = new Map(), inv = new THREE.Matrix4(), M = new THREE.Matrix4();
+  const bins = new Map(), inv = new THREE.Matrix4();
   g.updateWorldMatrix(true, false);
   inv.copy(g.matrixWorld).invert();
-  const dead = [];
   (function walk(o) {
     for (const c of o.children) {
       if (c.userData.keep) continue;
       if (c.isMesh) {
         c.updateWorldMatrix(true, false);
-        M.multiplyMatrices(inv, c.matrixWorld);
         const m = c.material, plain = isPlain(m), key = plain ? PLAIN : m;
         let b = bins.get(key);
-        if (!b) bins.set(key, b = { p: [], n: [], uv: [], c: [], rm: [], gl: [] });
-        add(b, c.geometry, M);
-        if (plain) for (let i = b.c.length; i < b.p.length; i += 3) { b.c.push(m.color.r, m.color.g, m.color.b); b.rm.push(m.roughness, m.metalness); b.gl.push(m.emissive.r * m.emissiveIntensity, m.emissive.g * m.emissiveIntensity, m.emissive.b * m.emissiveIntensity); }
+        if (!b) bins.set(key, b = { n: 0, list: [] });
+        b.n += c.geometry.index ? c.geometry.index.count : c.geometry.attributes.position.count;
+        b.list.push({ geo: c.geometry, m, M: new THREE.Matrix4().multiplyMatrices(inv, c.matrixWorld) });
       }
       walk(c);
     }
   })(g);
-  for (const c of g.children) if (!c.userData.keep) dead.push(c);
-  for (const c of dead) g.remove(c);
+  for (const c of g.children.filter(c => !c.userData.keep)) g.remove(c);
   for (const [m, b] of bins) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(b.p, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.n, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
-    if (m === PLAIN) for (const [k, list, n] of [['color', b.c, 3], ['aRM', b.rm, 2], ['aGlow', b.gl, 3]]) geo.setAttribute(k, new THREE.Float32BufferAttribute(list, n));
+    const geo = new THREE.BufferGeometry(), make = (name, size) => { const a = new Float32Array(b.n * size); geo.setAttribute(name, new THREE.BufferAttribute(a, size)); return a; };
+    const out = { p: make('position', 3), n: make('normal', 3), uv: make('uv', 2) };
+    const col = m === PLAIN && { c: make('color', 3), rm: make('aRM', 2), gl: make('aGlow', 3) };
+    let at = 0;
+    for (const q of b.list) {
+      const end = add(out, at, q.geo, q.M);
+      if (col) {
+        const { color: c, emissive: e, emissiveIntensity: k } = q.m;
+        for (let i = at; i < end; i++) {
+          col.c[i * 3] = c.r; col.c[i * 3 + 1] = c.g; col.c[i * 3 + 2] = c.b;
+          col.rm[i * 2] = q.m.roughness; col.rm[i * 2 + 1] = q.m.metalness;
+          col.gl[i * 3] = e.r * k; col.gl[i * 3 + 1] = e.g * k; col.gl[i * 3 + 2] = e.b * k;
+        }
+      }
+      at = end;
+    }
     const mesh = new THREE.Mesh(geo, m);
     mesh.castShadow = shadow && !m.transparent;
     g.add(mesh);
   }
   return g;
 }
-function add(b, geo, M) {
-  const p = geo.attributes.position, n = geo.attributes.normal, ix = geo.index, count = ix ? ix.count : p.count;
-  nm.getNormalMatrix(M);
-  for (let i = 0; i < count; i += 3) {
-    const t = [0, 1, 2].map(k => (ix ? ix.getX(i + k) : i + k));
-    const V = [A, B, C];
-    t.forEach((v, k) => V[k].fromBufferAttribute(p, v).applyMatrix4(M));
-    const face = new THREE.Vector3().subVectors(B, A).cross(N.subVectors(C, A));
-    const ax = Math.abs(face.x), ay = Math.abs(face.y), az = Math.abs(face.z);
-    t.forEach((v, k) => {
-      const q = V[k];
-      b.p.push(q.x, q.y, q.z);
-      N.fromBufferAttribute(n, v).applyMatrix3(nm).normalize();
-      b.n.push(N.x, N.y, N.z);
-      // pattern laid on in metres, so camouflage has the same size on every part
-      if (ax >= ay && ax >= az) b.uv.push(q.z * 1.8, q.y * 1.8); else if (ay >= az) b.uv.push(q.x * 1.8, q.z * 1.8); else b.uv.push(q.x * 1.8, q.y * 1.8);
-    });
+// Writes the triangles of geo, moved by M, from point number `at` on. Returns the number after the last one.
+function add(out, at, geo, M) {
+  const P = geo.attributes.position.array, N = geo.attributes.normal.array, ix = geo.index?.array, count = ix ? ix.length : P.length / 3, e = M.elements, w = nm.getNormalMatrix(M).elements, { p, n, uv } = out;
+  for (let i = 0; i < count; i++, at++) {
+    const s = (ix ? ix[i] : i) * 3, k = at * 3, x = P[s], y = P[s + 1], z = P[s + 2], a = N[s], b = N[s + 1], c = N[s + 2];
+    p[k] = e[0] * x + e[4] * y + e[8] * z + e[12]; p[k + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; p[k + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    const nx = w[0] * a + w[3] * b + w[6] * c, ny = w[1] * a + w[4] * b + w[7] * c, nz = w[2] * a + w[5] * b + w[8] * c, L = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    n[k] = nx / L; n[k + 1] = ny / L; n[k + 2] = nz / L;
+    if (i % 3 < 2) continue;
+    // pattern laid on in metres, so camouflage has the same size on every part
+    const o = k - 6, ux = p[o + 3] - p[o], uy = p[o + 4] - p[o + 1], uz = p[o + 5] - p[o + 2], vx = p[o + 6] - p[o], vy = p[o + 7] - p[o + 1], vz = p[o + 8] - p[o + 2];
+    const ax = Math.abs(uy * vz - uz * vy), ay = Math.abs(uz * vx - ux * vz), az = Math.abs(ux * vy - uy * vx);
+    const [u, v] = ax >= ay && ax >= az ? [2, 1] : ay >= az ? [0, 2] : [0, 1];
+    for (let q = 0; q < 3; q++) { const t = (at - 2 + q) * 2; uv[t] = p[o + q * 3 + u] * 1.8; uv[t + 1] = p[o + q * 3 + v] * 1.8; }
   }
+  return at;
 }
 // Frees the merged geometry of a model. Materials are shared and stay.
 export function dispose(g) {
-  g.traverse(o => { if (o.isMesh && o.geometry && ![...geoCache.values()].includes(o.geometry)) o.geometry.dispose(); });
+  g.traverse(o => { if (o.isMesh && o.geometry && !o.geometry.userData.shared) o.geometry.dispose(); });
 }

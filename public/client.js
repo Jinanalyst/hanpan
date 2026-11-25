@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
-import { packGear, unpackGear } from './shared/gear.js';
+import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
 import { makeSoldier, setWeapon, disposeSoldier, outfit } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
@@ -38,6 +38,7 @@ R.shadowMap.type = THREE.PCFSoftShadowMap;
 R.autoClear = false;
 R.toneMapping = THREE.ACESFilmicToneMapping;
 R.toneMappingExposure = 1.0;
+R.debug.checkShaderErrors = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);   // asking for errors makes the page wait for the graphics driver
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xc9d3dc, 70, 260);
@@ -309,6 +310,7 @@ function loadMap(id) {
   if (th.particles) { air.material.color.set(th.particles.color); air.material.size = th.particles.size; }
   for (const m of [...tracers, ...puffs]) m.visible = false;
   decals.count = decalI = 0;
+  if (built) warm();
 }
 
 /* ---------------- soldiers ---------------- */
@@ -331,7 +333,15 @@ function buildVMGun(id, M, finish) {
   const v = buildGun(id, finish);
   vmArms(v.g, M, v.left, v.right);
   bake(v.g, false);
+  for (const m of v.g.children) if (m.isMesh) m.material = vmMat(m.material);
   return v;
+}
+// The soldiers' materials, kept apart for the gun in your own hands: a material used under two sets of lights is set up again every frame.
+const vmMats = new Map();
+function vmMat(m) {
+  let c = vmMats.get(m);
+  if (!c) { c = m.clone(); c.onBeforeCompile = m.onBeforeCompile; vmMats.set(m, c); }
+  return c;
 }
 const flashTex = ctex(64, 64, (g, w, h) => {
   const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
@@ -341,17 +351,24 @@ const flashTex = ctex(64, 64, (g, w, h) => {
 });
 const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
 muzzle.visible = false;
-let VMS = {}, vmTeam = '';
+let VMS = {}, vmTeam = '', vmOutfit = null, vmGear = null;
 const vmRoot = new THREE.Group(); vmScene.add(vmRoot);
 function buildVM(team) {
   const key = team + packGear(kit().gear);
-  if (key === vmTeam) return;
+  if (key === vmTeam) { vmGun(act.lo); vmGun(act.sa); return; }
   vmTeam = key;
   vmRoot.remove(muzzle); dispose(vmRoot); vmRoot.clear();
-  const gear = kit().gear, M = outfit(team, gear);
+  vmGear = kit().gear; vmOutfit = outfit(team, vmGear);
   VMS = {};
-  for (const k in WEAPONS) { VMS[k] = buildVMGun(k, M, gear.finish); VMS[k].g.visible = false; vmRoot.add(VMS[k].g); }
   vmRoot.add(muzzle);
+  for (const k of new Set([act.lo, act.sa, cur])) vmGun(k);
+}
+// Guns are built when they are first carried, not all at once.
+function vmGun(k) {
+  if (VMS[k] || !vmOutfit || !WEAPONS[k]) return VMS[k];
+  const v = VMS[k] = buildVMGun(k, vmOutfit, vmGear.finish);
+  v.g.visible = false; vmRoot.add(v.g);
+  return v;
 }
 
 /* ---------------- effects ---------------- */
@@ -436,7 +453,7 @@ const blastLight = new THREE.PointLight(0xffa050, 0, 16, 2); scene.add(blastLigh
 let shake = 0;
 const fires = [];    // { g, t, life }
 const FLAME = [0xff7a1f, 0xffb038, 0xff4a14].map(c => new THREE.Color(c)), flameC = new THREE.Color();
-function addFire(p, life) {
+function fireModel() {
   const g = new THREE.Group();   // the flames are one draw call; added light, so a darker colour is a fainter flame
   const flames = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: puffTex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }), 44);
   flames.frustumCulled = false;
@@ -447,6 +464,10 @@ function addFire(p, life) {
   g.add(flames);
   const burnt = new THREE.Mesh(new THREE.CircleGeometry(EQUIP.fire.radius, 28), new THREE.MeshBasicMaterial({ color: 0x1a120c, transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
   burnt.rotation.x = -Math.PI / 2; burnt.position.y = 0.05; burnt.userData.ground = true; g.add(burnt);
+  return g;
+}
+function addFire(p, life) {
+  const g = fireModel();
   g.position.set(p.x, p.y, p.z); scene.add(g);
   fires.push({ g, t: 0, life, crackle: 0 });
 }
@@ -496,14 +517,18 @@ function updateArc() {
 }
 let blindEnd = 0, blindMax = 1;   // real time, so a slow screen is not blind for longer
 const smokes = [];   // { g, t, life }
-function addSmoke(p, life) {
+function smokeModel(n = 22) {
   const g = new THREE.Group();
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < n; i++) {
     const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: i % 2 ? 0xc6c9c4 : 0xa9ada8, transparent: true, depthWrite: false, rotation: Math.random() * 6 }));
     const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * 2.3;
     m.userData = { x: Math.cos(a) * r, y: rnd(0.3, 2.6), z: Math.sin(a) * r, s: rnd(2.6, 3.8), w: rnd(-0.15, 0.15) };
     g.add(m);
   }
+  return g;
+}
+function addSmoke(p, life) {
+  const g = smokeModel();
   g.position.set(p.x, p.y, p.z); scene.add(g);
   smokes.push({ g, t: 0, life });
 }
@@ -535,8 +560,8 @@ function updateThrown(dt) {
 
 /* ---------------- audio ---------------- */
 let AC = null, master = null, nbuf = null;
-function audio() {
-  if (AC) return;
+function audio() {   // made behind the menu, because opening the sound device takes a while; a click then lets it play
+  if (AC) { if (AC.state === 'suspended') AC.resume().catch(() => {}); return; }
   try {
     AC = new (window.AudioContext || window.webkitAudioContext)();
     master = AC.createGain(); master.gain.value = 0.7; master.connect(AC.destination);
@@ -652,16 +677,16 @@ function paintMutes() {
 let held = null;   // messages that wait until the land is loaded
 function onMsg(m) {
   if (held) { held.push(m); return; }
-  if (m.t === 'welcome' && !isReady(m.map) && isReal(m.map)) {
+  if (m.t === 'welcome' && !(m.map === MAP.id && warming?.ready)) {
     const mine = net, queue = held = [];
-    setText('center', 'Loading the city…');
-    ensureMap(m.map).then(() => { if (held !== queue) return; held = null; setText('center', ''); if (net === mine) for (const q of [m, ...queue]) if (net === mine && q.t !== 'pi') onMsg(q); },
+    setText('center', 'Loading the land…');
+    makeReady(m.map).then(() => { if (held !== queue) return; held = null; setText('center', ''); if (net === mine) for (const q of [m, ...queue]) if (net === mine && q.t !== 'pi') onMsg(q); },
       () => { if (held !== queue) return; held = null; if (net === mine) leaveGame('Could not load this land. Try again.'); });
     return;
   }
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { stance = me.cr = 0; slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; } break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { stance = me.cr = 0; slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -708,14 +733,19 @@ function onSnap(m) {
     let o = others.get(a[0]);
     const gear = roster.get(a[0])?.g || '';
     if (o && (o.team !== team || o.gear !== gear)) { dropSoldier(a[0]); o = null; }
-    if (!o) {
-      const g = makeSoldier(team, unpackGear(gear), a[8]);
-      o = { g, team, gear, walk: 0, px: a[1], pz: a[3], tag: null, dead: 0, s: { x: a[1], y: a[2], z: a[3], yaw: a[4], pitch: a[5], cr: a[6], alive: a[7] } };
-      scene.add(g); others.set(a[0], o);
-    }
-    setWeapon(o.g, a[8]);
+    if (o) setWeapon(o.g, a[8]);
   }
   for (const id of others.keys()) if (!map.has(id)) dropSoldier(id);
+}
+// New soldiers are dressed one per frame, so a full room does not stop the picture.
+function addSoldier() {
+  for (const a of snaps.at(-1).map.values()) {
+    if (a[0] === myId || others.has(a[0])) continue;
+    const team = a[9] ? 'blue' : 'red', gear = roster.get(a[0])?.g || '', g = makeSoldier(team, unpackGear(gear), a[8]);
+    scene.add(g);
+    others.set(a[0], { g, team, gear, walk: 0, px: a[1], pz: a[3], tag: null, dead: 0, s: { x: a[1], y: a[2], z: a[3], yaw: a[4], pitch: a[5], cr: a[6], alive: a[7] } });
+    return;
+  }
 }
 
 function dropSoldier(id) {
@@ -730,6 +760,7 @@ function dropSoldiers() { for (const id of [...others.keys()]) dropSoldier(id); 
 
 function interpRemotes(dt) {
   if (snaps.length < 2 || offEst == null) return;
+  addSoldier();
   const rt = nowS() + offEst - 0.1;
   let a = snaps[0], b = snaps[snaps.length - 1];
   for (let i = snaps.length - 1; i > 0; i--) if (snaps[i - 1].ts <= rt) { a = snaps[i - 1]; b = snaps[i]; break; }
@@ -977,6 +1008,77 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('pointerlockerror', () => { lockFailed = true; $('pauseOv').hidden = true; });
 
+/* ---------------- getting ready ---------------- */
+// The first time anything is drawn, its shader has to be built. Doing all of that behind the menu keeps the match itself smooth.
+const nextFrame = () => new Promise(r => { requestAnimationFrame(r); setTimeout(r, 150); });   // a hidden page gets no frames
+const within = (p, ms) => Promise.race([p, new Promise(r => setTimeout(r, ms))]);
+let samples = null;   // one of everything a match can show; never freed, because a shader goes away with its last user
+function makeSamples() {
+  const g = new THREE.Group();
+  g.add(makeSoldier('red', { camo: 'woodland', helmet: 'assault', vest: 'heavy', finish: 'tiger' }, 'rifle'), makeSoldier('blue', {}, 'sniper'));
+  for (const k in EQUIP) g.add(bake(buildEquip(k)));
+  const mark = new THREE.InstancedMesh(decals.geometry, decals.material.clone(), 1), dots = new THREE.Points(arc.geometry, arc.material.clone()), fire = fireModel();
+  mark.setMatrixAt(0, new THREE.Matrix4());
+  dots.material.opacity = 0;
+  for (const f of fire.children) if (f.isInstancedMesh) for (let i = 0; i < f.count; i++) { f.setMatrixAt(i, new THREE.Matrix4()); f.setColorAt(i, FLAME[0]); }
+  g.add(fire, smokeModel(1), mark, dots, nameTag('', '#fff'));
+  for (const m of [tracers[0], puffs[0], arcEnd]) { const c = m.clone(); c.material = m.material.clone(); c.visible = true; g.add(c); }
+  g.traverse(o => { o.frustumCulled = false; });
+  return g;
+}
+const warmed = new Set();
+let tried = 0, built = false, warming = null;   // { id, drawable: shaders are built, ready: a match may start, done }
+function warm() {
+  if (warming?.id === MAP.id) return warming.done;
+  const w = warming = { id: MAP.id, drawable: warmed.has(MAP.id), ready: warmed.has(MAP.id), done: null };
+  w.done = w.ready ? Promise.resolve() : warmUp(w).catch(e => console.warn('[warm]', e)).then(() => { w.drawable = w.ready = true; });
+  return w.done;
+}
+async function warmUp(w) {
+  samples ||= makeSamples();
+  buildVM(myTeam);
+  await within(Promise.all([R.compileAsync(scene, cam), R.compileAsync(samples, cam, scene), R.compileAsync(vmScene, vmCam)]), 8000);
+  w.drawable = true;
+  // then drawn once, too small to see, a few things per frame
+  const spot = new THREE.Group(), list = [...samples.children], hands = [muzzle, ...Object.values(VMS).map(v => v.g)].map(o => [o, o.visible]);
+  spot.scale.setScalar(1e-4); scene.add(spot);
+  vmRoot.scale.setScalar(1e-4); vmRoot.position.z = -1;
+  for (const [o] of hands) o.visible = true;
+  try {
+    for (let i = 0; i < list.length && warming === w; i += 3) {
+      spot.position.copy(cam.getWorldDirection(V)).multiplyScalar(3).add(cam.position);
+      spot.add(...list.slice(i, i + 3));
+      await nextFrame();
+      if (i === 0) { R.clearDepth(); R.render(vmScene, vmCam); }
+      await nextFrame();
+      spot.clear();
+    }
+    for (; tried < 9 && warming === w; tried++) {   // every piece of gear once: its shapes are kept, so soldiers in the match are dressed faster
+      disposeSoldier(makeSoldier('red', Object.fromEntries(SLOTS.map(s => [s, itemsOf(s)[tried % itemsOf(s).length]])), PRIMARIES[tried % PRIMARIES.length]));
+      await nextFrame();
+    }
+    if (!inGame && !warmed.size) {   // the screen panels and the hurt flash too, nearly see-through
+      const faint = ['vign', 'dmgdir', 'blind', 'nadeWarn'].map($), warn = $('nadeWarn').hidden;
+      Object.assign($('hud').style, { opacity: 0.01, zIndex: 99 }); $('hud').hidden = $('nadeWarn').hidden = false;
+      for (const e of faint) e.style.opacity = 0.9;
+      for (let i = 0; i < 3; i++) await nextFrame();
+      for (const e of faint) e.style.opacity = '';
+      $('hud').style.opacity = $('hud').style.zIndex = ''; $('hud').hidden = !inGame; $('nadeWarn').hidden = warn;
+    }
+    if (warming === w) warmed.add(w.id);
+  } finally {
+    samples.add(...list); spot.removeFromParent();
+    vmRoot.scale.setScalar(1); vmRoot.position.z = 0;
+    for (const [o, v] of hands) o.visible = v;
+  }
+}
+// Loads a land and waits until a match on it can start smoothly. 'any' is whatever the server picks.
+async function makeReady(id) {
+  if (id !== 'any') { await ensureMap(id); loadMap(id); }
+  while (!warming.ready) await warm();   // another land may have been chosen meanwhile
+}
+(window.requestIdleCallback || setTimeout)(() => { audio(); voice.ready(); });
+
 /* ---------------- menu ---------------- */
 $('nameIn').value = loadName();
 const sensIn = $('sensIn'); sensIn.value = sens; $('sensOut').textContent = sens.toFixed(1);
@@ -1054,6 +1156,7 @@ $('landSeg').onclick = e => { const b = e.target.closest('button'); if (!b) retu
 const status = t => { $('status').textContent = t; };
 loadMap(isReady(land) ? land : DEFAULT_MAP);
 paintLand();
+built = true; warm();
 // wallet login (optional; guests can always play)
 function paintAccount(user) {
   const box = $('account');
@@ -1120,9 +1223,9 @@ function needsStore() {
 let connecting = false;
 // Loads a land before a match. False when it did not work, or something else started meanwhile.
 async function prepare(id) {
-  if (id === 'any' || isReady(id)) return true;
-  connecting = true; status('Loading the city…');
-  try { await ensureMap(id); status(''); return !inGame; }
+  if (id === MAP.id && warming?.ready) return true;
+  connecting = true; status('Loading the land…');
+  try { await makeReady(id); status(''); return !inGame; }
   catch { status('Could not load this land. Check your connection and try again.'); if (document.pointerLockElement) document.exitPointerLock(); return false; }
   finally { connecting = false; }
 }
@@ -1180,6 +1283,7 @@ function frame() {
     else { cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0); }
     cam.fov = 60; cam.updateProjectionMatrix();
   }
+  if (warming && !warming.drawable) return;   // the last picture stays until the new land can be drawn without stopping
   updateAir(dt);
   if (MAP.city) fitShadow(true);
   R.clear(); R.render(scene, cam);
@@ -1228,8 +1332,8 @@ function updateLocal(dt, t) {
   const fov = 78 + (W.fov - 78) * adsT;
   if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
   // viewmodel
+  const vm = vmGun(cur);
   for (const k in VMS) VMS[k].g.visible = k === cur;
-  const vm = VMS[cur];
   if (vm) {
     const sw = Math.max(0, 0.35 - (t - switchT)) / 0.35 + (aiming ? 0.5 : 0);
     const rl = reloadT > 0 ? Math.sin(Math.PI * (1 - reloadT / reloadDur)) : 0;
