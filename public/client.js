@@ -1,10 +1,11 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
-import { getMap, isMap, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
+import { getMap, isMap, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
 import { PHYS, step, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
-import { WEAPONS } from './shared/weapons.js';
+import { WEAPONS, PRIMARIES, isPrimary } from './shared/weapons.js';
+import { floorPlan } from './floorplan.js';
 import { Room, cleanName } from './shared/game.js';
-import { configured, currentUser, maybeSignedIn, signOut, walletOf, shortWallet } from './auth.js';
+import { configured, currentUser, maybeSignedIn, signOut, accessToken, ownedProducts, walletOf, shortWallet } from './auth.js';
 
 const $ = id => document.getElementById(id);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -130,6 +131,16 @@ const T = {
     for (let y = 0; y < h; y += 32) { g.fillStyle = `hsl(28,30%,${27 + Math.random() * 9}%)`; g.fillRect(0, y, w, 31); }
     speck(g, w, h, 1500, ['#4d3a26', '#7d6243'], 3);
   }),
+  hull: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#aeb7c4'; g.fillRect(0, 0, w, h); speck(g, w, h, 1600, ['#a3acb9', '#bac3cf'], 2);
+    g.strokeStyle = 'rgba(40,50,70,.5)'; g.lineWidth = 3; for (let y = 0; y < h; y += 64) for (let x = 0; x < w; x += 128) g.strokeRect(x + (y / 64 % 2) * 64, y, 128, 64);
+  }),
+  basalt: ctex(256, 256, (g, w, h) => { g.fillStyle = '#3c3836'; g.fillRect(0, 0, w, h); speck(g, w, h, 5000, ['#322e2c', '#4a4542', '#575049'], 6); }),
+  lava: ctex(128, 128, (g, w, h) => { g.fillStyle = '#ff7a1f'; g.fillRect(0, 0, w, h); speck(g, w, h, 500, ['#ffb84a', '#e04a10', '#ffe08a'], 12); }),
+  tile: ctex(128, 128, (g, w, h) => { g.fillStyle = '#3d4a52'; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x += 16) { g.fillStyle = '#55646d'; g.fillRect(x, 0, 8, h); } }),
+  redwood: ctex(128, 128, (g, w, h) => { g.fillStyle = '#9c2f26'; g.fillRect(0, 0, w, h); speck(g, w, h, 700, ['#8c2820', '#ab3a30'], 3); g.fillStyle = '#2f7d6b'; g.fillRect(0, 0, w, 14); }),
+  plaster: ctex(128, 128, (g, w, h) => { g.fillStyle = '#e6dcc8'; g.fillRect(0, 0, w, h); speck(g, w, h, 700, ['#dbd0ba', '#efe7d6'], 3); g.fillStyle = '#8d8778'; g.fillRect(0, h * 0.8, w, h * 0.2); }),
+  hedge: ctex(128, 128, (g, w, h) => { g.fillStyle = '#4b6d38'; g.fillRect(0, 0, w, h); speck(g, w, h, 1800, ['#3d5c2d', '#5c8245', '#6d9450'], 5); }),
   cloth: ctex(128, 128, (g, w, h) => { for (let x = 0; x < w; x += 32) { g.fillStyle = x % 64 ? '#e8dcc2' : '#b23a2e'; g.fillRect(x, 0, 32, h); } }),
 };
 const groundTex = ([base, ...specks]) => ctex(512, 512, (g, w, h) => {
@@ -150,6 +161,8 @@ const MAT = {
   crate: std({ map: T.crate }),
   metal: std({ map: T.metal, roughness: 0.6, metalness: 0.3 }), panel: std({ map: T.panel, roughness: 0.7 }), brick: std({ map: T.brick }), stone: std({ map: T.stone }),
   rock: std({ map: T.rock }), snow: std({ map: T.snow }), wood: std({ map: T.wood }), cloth: std({ map: T.cloth }), tree: std({ map: T.wood }), leaf: std({ color: 0x3f6b2e }),
+  hull: std({ map: T.hull, roughness: 0.6, metalness: 0.2 }), basalt: std({ map: T.basalt }), lava: new THREE.MeshBasicMaterial({ map: T.lava }), tile: std({ map: T.tile, roughness: 0.7 }),
+  redwood: std({ map: T.redwood, roughness: 0.7 }), plaster: std({ map: T.plaster }), hedge: std({ map: T.hedge }), blossom: std({ map: T.wood }), petal: std({ color: 0xf2a5c0 }),
   neonM: new THREE.MeshBasicMaterial({ color: 0xff5fb4 }), neonC: new THREE.MeshBasicMaterial({ color: 0x5fe3ff }), neonY: new THREE.MeshBasicMaterial({ color: 0xffd75a }),
   sandbag: std({ map: T.sandbag }), barrier: std({ map: T.barrier }), barrel: std({ color: 0x46603d, roughness: 0.55, metalness: 0.35 }),
 };
@@ -171,10 +184,10 @@ function buildWorld(map) {
     const x = (b.min[0] + b.max[0]) / 2, z = (b.min[2] + b.max[2]) / 2;
     let m;
     if (b.kind === 'barrel') m = new THREE.Mesh(new THREE.CylinderGeometry(w / 2, w / 2, h, 18), MAT.barrel);
-    else if (b.kind === 'tree') {
+    else if (b.kind === 'tree' || b.kind === 'blossom') {
       m = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.4, w * 0.5, h, 10), MAT.tree);
       for (const [y, r] of [[h - 1.2, 2.4], [h + 0.4, 1.9], [h + 1.8, 1.2]]) {   // leaves are only for looks and sit above head height
-        const l = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), MAT.leaf);
+        const l = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), b.kind === 'tree' ? MAT.leaf : MAT.petal);
         l.scale.y = 0.6; l.position.set(x, y, z); l.castShadow = true; g.add(l);
       }
     } else {
@@ -182,7 +195,7 @@ function buildWorld(map) {
       m = new THREE.Mesh(boxGeo(w, h, d, b.kind === 'crate' ? Math.max(w, h, d) : TEXM[b.kind] || 3), mat);
     }
     m.position.set(x, (b.min[1] + b.max[1]) / 2, z);
-    m.castShadow = m.receiveShadow = !b.kind.startsWith('neon');
+    m.castShadow = m.receiveShadow = !b.kind.startsWith('neon') && b.kind !== 'lava';
     g.add(m);
   }
   const gt = groundTex(th.ground); gt.repeat.set(65, 65);
@@ -198,24 +211,30 @@ function buildWorld(map) {
       s.position.set(m.position.x * 0.88, h * rnd(0.4, 0.8), m.position.z * 0.88); s.lookAt(0, s.position.y, 0); g.add(s);
     }
   }
+  if (th.stars) {
+    const p = [];
+    for (let i = 0; i < 900; i++) { const a = rnd(0, 6.283), y = rnd(0.05, 1), r = Math.sqrt(1 - y * y); p.push(Math.cos(a) * r * 450, y * 450, Math.sin(a) * r * 450); }
+    g.add(new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(p, 3)), new THREE.PointsMaterial({ color: 0xdfe8ff, size: 2, sizeAttenuation: false, fog: false })));
+  }
   for (const [x, y, z, c] of map.lights) { const l = new THREE.PointLight(c, 45, 18, 1.8); l.position.set(x, y, z); g.add(l); }
   return g;
 }
-// falling snow, kept around the camera
-const SNOW_R = 22;
-const snow = new THREE.Points(
-  new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(Float32Array.from({ length: 1400 * 3 }, () => rnd(-SNOW_R, SNOW_R)), 3)),
+// snow, petals or embers, kept around the camera
+const AIR_R = 22;
+const air = new THREE.Points(
+  new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(Float32Array.from({ length: 1400 * 3 }, () => rnd(-AIR_R, AIR_R)), 3)),
   new THREE.PointsMaterial({ color: 0xffffff, size: 0.09, transparent: true, opacity: 0.8, depthWrite: false }));
-snow.frustumCulled = false; snow.visible = false; scene.add(snow);
-function updateSnow(dt) {
-  if (!MAP.theme.snow) return;
+air.frustumCulled = false; air.visible = false; scene.add(air);
+function updateAir(dt) {
+  const P = MAP.theme.particles;
+  if (!P) return;
   const c = [cam.position.x, cam.position.y, cam.position.z];
-  // no snow under roofs
-  snow.visible = !BOXES.some(b => b.max[0] - b.min[0] > 6 && b.min[1] > c[1] && c[0] > b.min[0] && c[0] < b.max[0] && c[2] > b.min[2] && c[2] < b.max[2]);
-  const p = snow.geometry.attributes.position, a = p.array, span = SNOW_R * 2;
+  // none under roofs
+  air.visible = !BOXES.some(b => b.max[0] - b.min[0] > 6 && b.min[1] > c[1] && c[0] > b.min[0] && c[0] < b.max[0] && c[2] > b.min[2] && c[2] < b.max[2]);
+  const p = air.geometry.attributes.position, a = p.array, span = AIR_R * 2;
   for (let i = 0; i < a.length; i += 3) {
-    a[i] += dt * 0.6; a[i + 1] -= dt * 2.2;
-    for (let k = 0; k < 3; k++) a[i + k] = c[k] + ((a[i + k] - c[k] + SNOW_R) % span + span) % span - SNOW_R;   // wrap around the camera
+    a[i] += dt * 0.6; a[i + 1] -= dt * P.fall;
+    for (let k = 0; k < 3; k++) a[i + k] = c[k] + ((a[i + k] - c[k] + AIR_R) % span + span) % span - AIR_R;   // wrap around the camera
   }
   p.needsUpdate = true;
 }
@@ -234,7 +253,8 @@ function loadMap(id) {
   hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
   sun.color.set(th.sun[0]); sun.intensity = th.sun[1]; sun.position.set(...th.sun[2]);
   vmHemi.intensity = vmSun.intensity = 2.2 * th.vm;
-  snow.visible = !!th.snow;
+  air.visible = !!th.particles;
+  if (th.particles) { air.material.color.set(th.particles.color); air.material.size = th.particles.size; }
   for (const m of [...tracers, ...decals, ...puffs]) m.visible = false;
 }
 
@@ -333,6 +353,29 @@ function buildPistol(team) {
   vmArms(g, team, [-0.03, -0.07, 0.03], [0.01, -0.07, 0.05]);
   return { g, muzzle: new THREE.Vector3(0, 0.035, -0.17), hip: new THREE.Vector3(0.14, -0.15, -0.36), ads: new THREE.Vector3(0, -0.063, -0.34) };
 }
+// Shared builder for the store weapons. Same open sight as the Carbine.
+function buildKit(team, { body, guard, barrel, stock, color, mag, extra }) {
+  const g = new THREE.Group(), col = vmMat(color, 0.75, 0.1), front = -body / 2 - guard;
+  vp(g, 0.07, 0.09, body, 0, 0, 0, METAL); vp(g, 0.078, 0.08, guard, 0, -0.005, -body / 2 - guard / 2, col);
+  vcyl(g, 0.014, barrel, 0, 0.008, front - barrel / 2, METAL);
+  vp(g, 0.04, 0.12, 0.05, 0, -0.09, body * 0.3, POLY, -0.35);
+  if (mag) vp(g, mag[0], mag[1], mag[2], 0, -0.04 - mag[1] / 2, -0.06, METAL, mag[3] || 0);
+  if (stock) vp(g, 0.055, 0.085, stock, 0, -0.015, body / 2 + stock / 2, col);
+  const sy = 0.09, sz = -0.02;
+  vp(g, 0.054, 0.008, 0.06, 0, sy + 0.025, sz, METAL); vp(g, 0.054, 0.008, 0.06, 0, sy - 0.025, sz, METAL);
+  vp(g, 0.008, 0.058, 0.06, -0.025, sy, sz, METAL); vp(g, 0.008, 0.058, 0.06, 0.025, sy, sz, METAL);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0016, 12), new THREE.MeshBasicMaterial({ color: 0x5fff6a }));
+  dot.position.set(0, sy, sz - 0.02); g.add(dot);
+  if (extra) extra(g, col);
+  vmArms(g, team, [0, -0.05, front + guard * 0.45], [0, -0.1, body * 0.28]);
+  return { g, muzzle: new THREE.Vector3(0, 0.008, front - barrel), hip: new THREE.Vector3(0.17, -0.16, -0.4), ads: new THREE.Vector3(0, -0.09, -0.3) };
+}
+const KITS = {
+  smg: { body: 0.3, guard: 0.14, barrel: 0.1, stock: 0.12, color: 0x7a5a2a, mag: [0.04, 0.22, 0.05, 0.1] },
+  shotgun: { body: 0.36, guard: 0.3, barrel: 0.2, stock: 0.24, color: 0x6b4226, extra: (g, col) => { vcyl(g, 0.016, 0.42, 0, -0.035, -0.4, METAL); vp(g, 0.06, 0.06, 0.16, 0, -0.04, -0.36, col); } },
+  dmr: { body: 0.44, guard: 0.3, barrel: 0.36, stock: 0.28, color: 0x4d5a3c, mag: [0.05, 0.12, 0.08, 0.05] },
+  lmg: { body: 0.48, guard: 0.26, barrel: 0.3, stock: 0.22, color: 0x3e4a52, mag: [0.15, 0.15, 0.16], extra: g => { for (const s of [-1, 1]) vp(g, 0.012, 0.16, 0.012, s * 0.05, -0.1, -0.5, METAL); } },
+};
 const flashTex = ctex(64, 64, (g, w, h) => {
   const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
   gr.addColorStop(0, 'rgba(255,250,220,1)'); gr.addColorStop(0.3, 'rgba(255,190,80,.9)'); gr.addColorStop(1, 'rgba(255,120,20,0)');
@@ -348,6 +391,7 @@ function buildVM(team) {
   vmTeam = team;
   vmRoot.clear();
   VMS = { rifle: buildRifle(team), sniper: buildSniper(team), pistol: buildPistol(team) };
+  for (const k in KITS) VMS[k] = buildKit(team, KITS[k]);
   for (const k in VMS) { VMS[k].g.visible = false; vmRoot.add(VMS[k].g); }
   vmRoot.add(muzzle);
 }
@@ -407,13 +451,13 @@ function shotSfx(w, dist = 0, pan = 0) {
   if (!AC) return;
   const t = AC.currentTime, v = 1 / (1 + dist * 0.06), P = AC.createStereoPanner();
   P.pan.value = clamp(pan, -1, 1); P.connect(master);
-  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (w === 'sniper' ? 2600 : w === 'pistol' ? 4200 : 3400) / (1 + dist * 0.03);
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (WEAPONS[w]?.heavy ? 2600 : w === 'pistol' ? 4200 : 3400) / (1 + dist * 0.03);
   const s = AC.createBufferSource(); s.buffer = nbuf;
-  const g = AC.createGain(), dur = w === 'sniper' ? 0.55 : 0.18;
+  const g = AC.createGain(), dur = w === 'sniper' ? 0.55 : WEAPONS[w]?.heavy ? 0.28 : 0.18;
   g.gain.setValueAtTime(0.55 * v, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   s.connect(lp).connect(g).connect(P); s.start(t, Math.random() * 0.4); s.stop(t + dur);
   const o = AC.createOscillator(), og = AC.createGain();
-  o.frequency.setValueAtTime(w === 'sniper' ? 110 : 150, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+  o.frequency.setValueAtTime(WEAPONS[w]?.heavy ? 110 : 150, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
   og.gain.setValueAtTime(0.7 * v, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
   o.connect(og).connect(P); o.start(t); o.stop(t + 0.16);
 }
@@ -434,7 +478,7 @@ function noiseSfx(d, f, v, at = 0) {
 let net = null, inGame = false, myId = 0, myTeam = 'red', roster = new Map(), snaps = [], offEst = null;
 const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0 };
 let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
-let lo = store.get('hanpan-lo', 'rifle') === 'sniper' ? 'sniper' : 'rifle', cur = lo, switchT = 0;
+let lo = isPrimary(store.get('hanpan-lo', 'rifle')) ? store.get('hanpan-lo', 'rifle') : 'rifle', cur = lo, switchT = 0;
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
 let reloadT = 0, reloadDur = 1, shotTimes = [], deathAt = null, killer = 0, wasAlive = true, stepAcc = 0, inputAcc = 0, lastHurt = 0;
@@ -446,7 +490,7 @@ function send(m) { if (net) net.send(m); }
 
 function onMsg(m) {
   switch (m.t) {
-    case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
+    case 'welcome': loadMap(m.map); if (isPrimary(m.lo) && m.lo !== lo) { cur = lo = m.lo; paintLo(); } myId = m.id; myTeam = m.team; buildVM(myTeam); break;
     case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; break;
     case 's': onSnap(m); break;
     case 'ro': {
@@ -463,6 +507,7 @@ function onMsg(m) {
     case 'rl': reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
     case 'end': showEnd(m); break;
     case 'start': setText('center', ''); break;
+    case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
     case 'pi': send({ t: 'po', s: m.s }); break;
   }
 }
@@ -557,18 +602,22 @@ function tryFire() {
   bloom = Math.min(W.spread.max, bloom + W.spread.bloom);
   const kv = W.recoil.v * (1 - 0.4 * adsT) * (me.cr ? 0.8 : 1);
   me.pitch = clamp(me.pitch + kv, -1.5, 1.5); me.yaw += gauss() * W.recoil.h; recoilDebt += kv * 0.55;
-  kick.z = cur === 'sniper' ? 0.12 : 0.05; kick.r = cur === 'sniper' ? 0.18 : 0.07;
+  const hard = cur === 'sniper' || cur === 'shotgun';
+  kick.z = hard ? 0.12 : 0.05; kick.r = hard ? 0.18 : 0.07;
   muzzle.visible = !(W.scope && adsT > 0.9); muzzle.material.rotation = Math.random() * 6; muzzle.userData.t = 0.045;
   flashLight.intensity = 6; vmFlashLight.intensity = 2;
   shotSfx(cur);
   // local prediction of where the bullet lands (the server decides hits)
   const eye = new THREE.Vector3(me.x, me.y + eyeH, me.z), d = dirFrom(yaw, pitch), o = [eye.x, eye.y, eye.z], n = [0, 0, 0];
-  let tt = rayMap(o, d, BOXES, W.range, n), victim = false;
-  for (const [, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; } }
-  const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
   const from = cam.localToWorld(V.set(adsT > 0.5 ? 0 : 0.25, adsT > 0.5 ? -0.08 : -0.2, -2)).clone();
-  if (cur !== 'pistol' || Math.random() < 0.5) tracer(from, end);
-  if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range) impact(end, n);
+  for (let i = 0; i < (W.pellets || 1); i++) {
+    if (W.pellets) d.splice(0, 3, ...dirFrom(yaw + rnd(-W.pelletSpread, W.pelletSpread), pitch + rnd(-W.pelletSpread, W.pelletSpread)));
+    let tt = rayMap(o, d, BOXES, W.range, n), victim = false;
+    for (const [, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; } }
+    const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
+    if (cur !== 'pistol' || Math.random() < 0.5) tracer(from, end);
+    if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range) impact(end, n);
+  }
 }
 function remoteShot(m) {
   const o = new THREE.Vector3(...m.o), e = new THREE.Vector3(...m.e);
@@ -576,6 +625,7 @@ function remoteShot(m) {
   if (q) { o.set(q.s.x, q.s.y + (q.s.cr ? 1 : 1.4), q.s.z); q.lastShot = nowS(); }
   tracer(o, e);
   if (!m.hit) impact(e, null);
+  for (const p of m.m || []) { const x = new THREE.Vector3(...p); tracer(o, x); if (!m.hit) impact(x, null); }
   const dx = o.x - me.x, dz = o.z - me.z, dist = Math.hypot(dx, dz);
   shotSfx(m.w, dist, -Math.sin(wrapA(Math.atan2(-dx, -dz) - me.yaw)));
 }
@@ -696,33 +746,41 @@ document.addEventListener('pointerlockerror', () => { lockFailed = true; $('paus
 $('nameIn').value = store.get('hanpan-name', 'Recruit' + Math.floor(Math.random() * 900 + 100));
 const sensIn = $('sensIn'); sensIn.value = sens; $('sensOut').textContent = sens.toFixed(1);
 sensIn.oninput = () => { sens = +sensIn.value; $('sensOut').textContent = sens.toFixed(1); store.set('hanpan-sens', sens); };
-function paintLo() { for (const b of $('loSeg').children) b.setAttribute('aria-pressed', b.dataset.lo === lo); }
+let owned = new Set();
+const locked = product => !!product && !owned.has(product);
+for (const id of PRIMARIES) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.lo = id; b.append(WEAPONS[id].name);
+  if (WEAPONS[id].product) { const s = document.createElement('small'); b.append(s); }
+  $('loSeg').append(b);
+}
+function paintLo() {
+  for (const b of $('loSeg').children) {
+    b.setAttribute('aria-pressed', b.dataset.lo === lo);
+    const s = b.querySelector('small'), no = locked(WEAPONS[b.dataset.lo].product);
+    b.classList.toggle('locked', no);
+    if (s) s.textContent = no ? 'Locked' : 'Owned';
+  }
+}
 $('loSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; lo = b.dataset.lo; store.set('hanpan-lo', lo); paintLo(); };
 paintLo();
 let land = store.get('hanpan-land', DEFAULT_MAP);
 if (land !== 'any' && !isMap(land)) land = DEFAULT_MAP;
-function floorPlan(map) {
-  const c = document.createElement('canvas'), [hx, hz] = map.size, g = c.getContext('2d');
-  c.width = 160; c.height = 80;
-  // turned sideways so Red is on the left and Blue on the right
-  const k = Math.min(156 / (hz * 2), 76 / (hx * 2)), w = hz * 2 * k, h = hx * 2 * k;
-  g.translate(80, 40);
-  g.fillStyle = map.theme.ground[0]; g.fillRect(-w / 2, -h / 2, w, h);
-  g.fillStyle = 'rgba(15,17,12,.6)';
-  for (const b of map.boxes) if (b.min[1] < 2 && b.kind !== 'perimeter') g.fillRect(b.min[2] * k, -b.max[0] * k, (b.max[2] - b.min[2]) * k, (b.max[0] - b.min[0]) * k);
-  g.fillStyle = '#ff6a4d'; g.fillRect(-w / 2, -h / 2, 5, h);
-  g.fillStyle = '#5aa5ff'; g.fillRect(w / 2 - 5, -h / 2, 5, h);
-  return c;
-}
-for (const { id, name, desc } of [...MAP_LIST, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
+for (const { id, name, desc, product } of [...MAP_LIST, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
   const b = document.createElement('button'), n = document.createElement('b'), d = document.createElement('small');
   b.type = 'button'; b.dataset.land = id; n.textContent = name; d.textContent = desc;
   if (id === 'any') { const q = document.createElement('span'); q.className = 'any'; q.textContent = '?'; q.ariaHidden = 'true'; b.append(q); } else b.append(floorPlan(getMap(id)));
+  if (product) { const l = document.createElement('i'); l.className = 'lock'; b.append(l); b.dataset.product = product; }
   b.append(n, d); $('landSeg').append(b);
 }
 function paintLand() {
-  for (const b of $('landSeg').children) b.setAttribute('aria-pressed', b.dataset.land === land);
-  if (land !== 'any') loadMap(land);   // show the chosen land behind the menu
+  for (const b of $('landSeg').children) {
+    b.setAttribute('aria-pressed', b.dataset.land === land);
+    const l = b.querySelector('.lock'), no = locked(b.dataset.product);
+    b.classList.toggle('locked', no);
+    if (l) l.textContent = no ? 'Locked' : 'Owned';
+  }
+  if (land !== 'any' && !inGame) loadMap(land);   // show the chosen land behind the menu
 }
 $('landSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; land = b.dataset.land; store.set('hanpan-land', land); paintLand(); };
 loadMap(land);
@@ -733,10 +791,15 @@ function paintAccount(user) {
   const box = $('account');
   box.textContent = '';
   if (!configured) return;
+  const shop = document.createElement('a');
+  shop.href = 'store.html'; shop.textContent = 'Store'; shop.className = 'shop';
+  box.append(shop);
   const a = document.createElement('a');
   a.href = 'login.html';
   if (user) { const w = walletOf(user); a.textContent = shortWallet(w); a.title = 'Signed in as ' + w; } else a.textContent = 'Log in with wallet';
   box.append(a);
+  if (user) ownedProducts().then(s => { owned = s; paintLo(); paintLand(); }, () => {});
+  else { owned = new Set(); paintLo(); paintLand(); }
   if (!user) return;
   const out = document.createElement('button');
   out.type = 'button'; out.textContent = 'Log out';
@@ -759,29 +822,45 @@ function leaveGame(msg = '') {
 }
 $('practice').onclick = () => {
   audio(); lock();
-  const room = new Room({ id: 'practice', minPlayers: 8, map: land === 'any' ? randomMap() : land });
+  const room = new Room({ id: 'practice', minPlayers: 8, map: land === 'any' ? randomMap(owned) : land });
   let live = true;
-  const id = room.addPlayer(playerName(), lo, m => queueMicrotask(() => live && onMsg(m)));
+  const id = room.addPlayer(playerName(), lo, m => queueMicrotask(() => live && onMsg(m)), 'all');   // practice: try everything
   const timer = setInterval(() => room.update(1 / 30), 1000 / 30);
   net = { send: m => room.onMessage(id, m), close() { live = false; clearInterval(timer); } };
   enterGame();
 };
-$('online').onclick = () => {
+// Say what is locked instead of silently changing the player's choice.
+function needsStore() {
+  const what = land !== 'any' && !canPlay(land, owned) ? getMap(land).name : locked(WEAPONS[lo].product) ? WEAPONS[lo].name : null;
+  if (!what) return false;
+  status('');
+  const a = document.createElement('a');
+  a.href = 'store.html'; a.textContent = 'Open the Store';
+  $('status').append(what + ' is locked online. Practice is free. ', a);
+  return true;
+}
+let connecting = false;
+$('online').onclick = async () => {
+  if (connecting || needsStore()) return;
   audio(); lock();
   if (!/^https?:$/.test(location.protocol)) { status('Open this page from the game server to play online.'); return; }
   status('Connecting…');
-  let ws, opened = false;
+  connecting = true;
+  const token = await accessToken().catch(() => null);
+  connecting = false;
+  if (inGame) return;
+  let ws, opened = false, mine = null;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); }
   catch { status('No game server found at this address. Try Practice, or deploy the server.'); return; }
   const to = setTimeout(() => { if (!opened) { ws.close(); status('No game server found at this address. Try Practice, or deploy the server.'); if (document.pointerLockElement) document.exitPointerLock(); } }, 4000);
   ws.onopen = () => {
     opened = true; clearTimeout(to);
-    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo, map: land }));
-    net = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, close: () => ws.close() };
+    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo, map: land, token: token || undefined }));
+    net = mine = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, close: () => ws.close() };
     enterGame();
   };
-  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch { return; } onMsg(m); };
-  ws.onclose = () => { if (inGame && net) leaveGame('Disconnected from the server.'); };
+  ws.onmessage = e => { if (net !== mine) return; let m; try { m = JSON.parse(e.data); } catch { return; } onMsg(m); };
+  ws.onclose = () => { if (inGame && mine && net === mine) leaveGame('Disconnected from the server.'); };
   ws.onerror = () => {};
 };
 $('resume').onclick = () => lock();
@@ -810,7 +889,7 @@ function frame() {
     cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0);
     cam.fov = 60; cam.updateProjectionMatrix();
   }
-  updateSnow(dt);
+  updateAir(dt);
   R.clear(); R.render(scene, cam);
   const W = WEAPONS[cur];
   if (inGame && srv.al && !(W.scope && adsT > 0.9)) { R.clearDepth(); R.render(vmScene, vmCam); }

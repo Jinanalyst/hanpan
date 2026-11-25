@@ -19,6 +19,11 @@ function stall(x, z) {
   const posts = [[-1.5, -0.8], [1.5, -0.8], [-1.5, 0.8], [1.5, 0.8]];
   return [[x, z, 2.6, 0.9, 1.1, 'wood'], [x, z, 3.5, 2.1, 0.15, 'cloth', 2.9], ...posts.map(([a, b]) => [x + a, z + b, 0.14, 0.14, 2.9, 'wood'])];
 }
+// Four posts and a flat roof, standing on a floor at height y.
+function pavilion(x, z, w, d, y, h, post, roof) {
+  const p = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([a, b]) => [x + a * (w / 2 - 0.5), z + b * (d / 2 - 0.5), 0.6, 0.6, h, post, y]);
+  return [...p, [x, z, w + 1.4, d + 1.4, 0.4, roof, y + h], [x, z, w * 0.6, d * 0.6, 0.6, roof, y + h + 0.4]];
+}
 const spawnLine = (z, xs) => xs.map(x => [x, z]);
 
 const DEFS = {
@@ -105,7 +110,7 @@ const DEFS = {
     ],
     theme: {
       skyTop: 0x8fa9c4, skyHor: 0xe9eff4, fog: [0xdde6ee, 40, 170], hemi: [0xeaf2ff, 0x9fb0c2, 1.35], sun: [0xf4f7ff, 1.9, [-30, 50, -25]],
-      ground: ['#e4ebf1', '#d6dfe8', '#f2f6f9', '#cbd6e0', '#eef3f7'], perimeter: 0xc8d4de, wall: 0xdfe6ec, far: ['peak', 0xb9c7d4], snow: true, vm: 1,
+      ground: ['#e4ebf1', '#d6dfe8', '#f2f6f9', '#cbd6e0', '#eef3f7'], perimeter: 0xc8d4de, wall: 0xdfe6ec, far: ['peak', 0xb9c7d4], particles: { color: 0xffffff, fall: 2.2, size: 0.09 }, vm: 1,
     },
   },
 
@@ -161,13 +166,103 @@ const DEFS = {
       ground: ['#5f7340', '#52663a', '#6d8249', '#7a6f45', '#48592f'], perimeter: 0x9ba488, wall: 0xd0d2bd, far: ['peak', 0x55703f], vm: 1,
     },
   },
+
+  /* ---- paid lands: product is the store id ---- */
+  orbital: {
+    name: 'Orbital Dock', desc: 'A space station under the stars', size: [36, 40], product: 'land:orbital',
+    spawns: spawnLine(-37, [-18, -12, -6, 0, 6, 12, 18]),
+    half: [
+      // reactor
+      [0, 0, 9, 9, 0.4, 'hull'], [0, 0, 2.6, 2.6, 4.6, 'hull', 0.4], [0, 0, 2, 2, 1, 'neonC', 5],
+      // bulkheads
+      [-12, -8, 0.6, 12, 3.2, 'hull'], [12, -9, 0.6, 10, 3.2, 'hull'], [-6, -14, 9, 0.6, 3.2, 'hull'], [7, -16, 8, 0.6, 3.2, 'hull'],
+      [-12, -8, 0.7, 11, 0.15, 'neonC', 2.6], [12, -9, 0.7, 9, 0.15, 'neonM', 2.6], [7, -16, 7, 0.7, 0.15, 'neonC', 2.6],
+      // roofed tunnel on the flank
+      [-25, -14, 0.5, 14, 3, 'hull'], [-19, -16, 0.5, 8, 3, 'hull'], [-22, -14, 6.5, 14, 0.3, 'hull', 3],
+      // raised gallery
+      [26, -4, 5, 6, 2, 'metal'], [26, -6.8, 5, 0.4, 0.9, 'hull', 2], ...stairs(23.5, -4, -1, 0, 2.4, 2, 'metal'),
+      // fuel tanks and cargo
+      [21, -14, 4, 4, 3.4, 'metal'], [30, -18, 3, 6, 2.6, 'container'], [-30, -27, 6.1, 2.6, 2.6, 'container'], [25, -30, 6.1, 2.6, 2.6, 'container'],
+      [-4.5, -8, 1.2, 1.2, 1.2, 'crate'], [5, -8, 1.2, 1.2, 1.2, 'crate'], [-15, -21, 1.2, 1.2, 1.2, 'crate'], [15.5, -23, 1.2, 1.2, 1.2, 'crate'], [-31, -6, 1.2, 1.2, 1.2, 'crate'],
+      [0, -21, 6, 0.9, 1.05, 'hull'], [-9, -27, 4, 0.9, 1.05, 'hull'], [9, -27, 4, 0.9, 1.05, 'hull'], [-18, -5, 0.9, 4, 1.05, 'hull'],
+      [-4, -33, 4, 0.8, 1.3, 'barrier'], [14, -33, 4, 0.8, 1.3, 'barrier'], [-17, -33, 4, 0.8, 1.3, 'barrier'],
+      [17, -5, 0.8, 0.8, 1.1, 'barrel'], [-28, -20, 0.8, 0.8, 1.1, 'barrel'],
+    ],
+    lights: [[0, 4, -7, 0x6fe0ff], [-14, 4, -12, 0x6fe0ff], [14, 4, -9, 0xff6fc0]],
+    theme: {
+      skyTop: 0x020308, skyHor: 0x141d38, fog: [0x10172b, 60, 260], hemi: [0xbccbf2, 0x555c74, 2.4], sun: [0xe6eeff, 2.2, [40, 50, -25]],
+      ground: ['#6c7480', '#626a76', '#777f8b', '#59616d', '#828a96'], perimeter: 0x7a8496, wall: 0xc2cad6, far: ['tower', 0x232b40], stars: true, vm: 0.95,
+    },
+  },
+
+  foundry: {
+    name: 'Ember Foundry', desc: 'Molten vats and falling ash', size: [34, 42], product: 'land:foundry',
+    spawns: spawnLine(-39, [-20, -13, -6, 0, 6, 13, 20]),
+    half: [
+      // crucible and gantry
+      [0, 0, 5, 5, 2.4, 'basalt'], [0, 0, 4, 4, 0.12, 'lava', 2.4], [-5.5, -5, 1, 1, 6, 'metal'], [5.5, -5, 1, 1, 6, 'metal'], [0, -5, 12, 0.9, 0.8, 'metal', 6], [-5.5, 0, 0.7, 9.1, 0.7, 'metal', 6],
+      // vats (too high to jump into)
+      [-14, -10, 6, 5, 1.4, 'basalt'], [-14, -10, 5, 4, 0.1, 'lava', 1.4], [15, -13, 5, 6, 1.4, 'basalt'], [15, -13, 4, 5, 0.1, 'lava', 1.4],
+      // brick halls
+      [-24, -16, 8, 0.8, 3.4, 'brick'], [-19.6, -20, 0.8, 8.8, 3.4, 'brick'], [24, -21, 0.8, 10, 3.4, 'brick'], [21, -4, 8, 0.8, 3, 'brick'], [-25, -3, 0.8, 8, 3, 'brick'],
+      // furnace
+      [7, -25, 4, 4, 5, 'brick'], [7, -25, 1.6, 1.6, 4, 'basalt', 5], [7, -22.95, 1.8, 0.1, 1.2, 'lava', 0.4],
+      // catwalk
+      [-8, -21, 8, 3, 2.2, 'metal'], [-8, -19.7, 8, 0.3, 0.9, 'metal', 2.2], ...stairs(-4, -21, 1, 0, 2.2, 2.2, 'metal'),
+      // cover
+      [-15, -31, 6.1, 2.6, 2.6, 'container'], [18, -31, 6.1, 2.6, 2.6, 'container'], [29, -11, 2.6, 6.1, 2.6, 'container'],
+      [-7, -12, 1.2, 1.2, 1.2, 'crate'], [8, -8.5, 1.2, 1.2, 1.2, 'crate'], [4, -16, 1.2, 1.2, 1.2, 'crate'], [-29, -10, 1.2, 1.2, 1.2, 'crate'], [28, -27, 1.2, 1.2, 1.2, 'crate'],
+      [0, -11, 4, 0.9, 1.05, 'sandbag'], [-27, -25, 4, 0.9, 1.05, 'sandbag'], [-18, -3, 0.9, 4, 1.05, 'sandbag'],
+      [0, -33, 4, 0.8, 1.3, 'barrier'], [-25, -35, 4, 0.8, 1.3, 'barrier'], [9, -35, 4, 0.8, 1.3, 'barrier'],
+      [11, -19, 0.8, 0.8, 1.1, 'barrel'], [-22, -22, 0.8, 0.8, 1.1, 'barrel'], [12, -2.5, 0.8, 0.8, 1.1, 'barrel'],
+    ],
+    lights: [[-14, 3, -10, 0xff7a2a], [15, 3, -13, 0xff7a2a], [0, 4.5, -3, 0xff9a3a], [7, 2, -21, 0xff7a2a]],
+    theme: {
+      skyTop: 0x2a0f12, skyHor: 0x9a3a1e, fog: [0x6b2c1c, 45, 190], hemi: [0xffc9a6, 0x5a3a34, 1.9], sun: [0xffa066, 2.0, [-30, 45, 25]],
+      ground: ['#4a4340', '#403936', '#564e4a', '#352f2d', '#625955'], perimeter: 0x7a625a, wall: 0xb39c92, far: ['peak', 0x35201d], particles: { color: 0xffa050, fall: -1.4, size: 0.07 }, vm: 0.9,
+    },
+  },
+
+  palace: {
+    name: 'Blossom Palace', desc: 'Painted halls among pink trees', size: [40, 38], product: 'land:palace',
+    spawns: spawnLine(-35, [-18, -12, -6, 0, 6, 12, 18]),
+    half: [
+      // great hall
+      [0, 0, 14, 10, 0.8, 'stone'], ...stairs(0, -5, 0, -1, 5, 0.8, 'stone'), ...stairs(-7, 0, -1, 0, 4, 0.8, 'stone'),
+      [-5.5, -3.8, 0.7, 0.7, 3.6, 'redwood', 0.8], [-2, -3.8, 0.7, 0.7, 3.6, 'redwood', 0.8], [2, -3.8, 0.7, 0.7, 3.6, 'redwood', 0.8], [5.5, -3.8, 0.7, 0.7, 3.6, 'redwood', 0.8],
+      [0, 0, 16.5, 12.5, 0.5, 'tile', 4.4], [0, 0, 11.5, 8.5, 0.7, 'tile', 4.9], [0, 0, 6, 4, 0.6, 'tile', 5.6], [0, 0, 4, 0.4, 2, 'redwood', 0.8],
+      // gate
+      [-3.5, -20, 0.8, 0.8, 4, 'redwood'], [3.5, -20, 0.8, 0.8, 4, 'redwood'], [0, -20, 10, 2.6, 0.4, 'tile', 4], [0, -20, 7, 1.4, 0.5, 'tile', 4.4],
+      [-9, -20, 9, 0.7, 2.6, 'plaster'], [-9, -20, 9.2, 1.1, 0.25, 'tile', 2.6], [9, -20, 9, 0.7, 2.6, 'plaster'], [9, -20, 9.2, 1.1, 0.25, 'tile', 2.6],
+      // courtyard walls
+      [-20, -12, 10, 0.7, 2.4, 'plaster'], [-20, -12, 10.2, 1.1, 0.25, 'tile', 2.4], [21, -13, 9, 0.7, 2.4, 'plaster'], [21, -13, 9.2, 1.1, 0.25, 'tile', 2.4],
+      [-29, -6, 0.7, 9, 2.4, 'plaster'], [-29, -6, 1.1, 9.2, 0.25, 'tile', 2.4], [29, -5, 0.7, 8, 2.4, 'plaster'], [29, -5, 1.1, 8.2, 0.25, 'tile', 2.4],
+      // side pavilion
+      [-28, -24, 7, 6, 1.2, 'stone'], ...stairs(-24.5, -24, 1, 0, 2.6, 1.2, 'stone'), ...pavilion(-28, -24, 7, 6, 1.2, 3, 'redwood', 'tile'), [-28, -21.2, 4, 0.4, 0.9, 'redwood', 1.2],
+      // hedges, lanterns, rocks
+      [0, -12, 6, 1, 1.05, 'hedge'], [-13, -27, 5, 1, 1.05, 'hedge'], [14, -27, 5, 1, 1.05, 'hedge'], [15, -5, 1, 5, 1.05, 'hedge'], [-14, -5, 1, 5, 1.05, 'hedge'],
+      [-6, -15, 0.8, 0.8, 1.3, 'stone'], [6, -15, 0.8, 0.8, 1.3, 'stone'], [24, -7, 0.8, 0.8, 1.3, 'stone'], [-23, -5, 0.8, 0.8, 1.3, 'stone'],
+      [27, -22, 4, 3, 2, 'rock'], [34, -12, 3, 4, 2.4, 'rock'], [-35, -14, 3, 3, 2, 'rock'],
+      [0, -29, 4, 0.8, 1.3, 'stone'], [-22, -31, 4, 0.8, 1.3, 'stone'], [22, -31, 4, 0.8, 1.3, 'stone'],
+      [-18, -18, 0.7, 0.7, 5, 'blossom'], [17, -19, 0.7, 0.7, 5, 'blossom'], [33, -28, 0.7, 0.7, 5, 'blossom'], [-34, -31, 0.7, 0.7, 5, 'blossom'], [11, -10, 0.7, 0.7, 5, 'blossom'], [-35, -3, 0.7, 0.7, 5, 'blossom'],
+    ],
+    theme: {
+      skyTop: 0x6f9fd0, skyHor: 0xf6dfe4, fog: [0xead6dc, 55, 210], hemi: [0xfff0f2, 0x6a6a50, 1.35], sun: [0xffe9d0, 2.5, [32, 52, 24]],
+      ground: ['#a79f8a', '#9a927d', '#b3ab96', '#8d8671', '#c9a9a9'], perimeter: 0xd8cfc0, wall: 0xe6ded0, far: ['peak', 0x7d8c72], particles: { color: 0xffc4d6, fall: 0.8, size: 0.1 }, vm: 1,
+    },
+  },
 };
 
 export const DEFAULT_MAP = 'compound';
 export const MAP_IDS = Object.keys(DEFS);
-export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc }));
+export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product }));
 export const isMap = id => typeof id === 'string' && Object.hasOwn(DEFS, id);
-export const randomMap = () => MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)];
+// Is this land free, or owned? owned is a Set of store product ids.
+export const canPlay = (id, owned) => isMap(id) && (!DEFS[id].product || !!owned?.has(DEFS[id].product));
+export function randomMap(owned) {
+  const ids = MAP_IDS.filter(id => canPlay(id, owned));
+  return ids[Math.floor(Math.random() * ids.length)];
+}
 
 const built = {};
 // Returns the built land. Unknown ids fall back to the default one.
@@ -191,7 +286,7 @@ function build(id, def) {
   }));
   const lights = (def.lights || []).flatMap(([x, y, z, c]) => [[x, y, z, c], [-x, y, -z, c]]);
   return {
-    id, name: def.name, desc: def.desc, size: def.size, theme: def.theme, lights, boxes,
+    id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes,
     spawns: { red: def.spawns, blue: def.spawns.map(([x, z]) => [-x, -z]) },
     nav: buildNav(boxes, hx, hz),
   };

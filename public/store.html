@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Store · HANPAN 한판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="storePage">
+<header class="storeTop">
+  <a href="./" class="brand">HANPAN</a>
+  <nav><a href="./">Play</a> <span id="who"></span></nav>
+</header>
+<main class="store">
+  <div id="orderBox" class="orderBox" role="status" hidden></div>
+  <p id="status" role="status"></p>
+  <section aria-labelledby="wh">
+    <h2 id="wh">Weapons</h2>
+    <p class="sub">New ways to play, not stronger ones: none of them beats the free Carbine on body shots. Try any of them free in Practice.</p>
+    <div id="weapons" class="goods"></div>
+  </section>
+  <section aria-labelledby="lh">
+    <h2 id="lh">Lands</h2>
+    <p class="sub">Own a land to play it online. Explore any of them free in Practice.</p>
+    <div id="lands" class="goods"></div>
+  </section>
+  <p class="fine">You pay in crypto (SOL and others) on NOWPayments' page. Items are added to your wallet account once the payment is fully confirmed, which usually takes a few minutes. Send the exact amount shown: an underpaid order is not completed automatically. Items are digital, work only in HANPAN and cannot be traded.</p>
+</main>
+<script type="module" src="store.js"></script>
+</body>
+</html>

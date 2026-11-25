@@ -42,7 +42,24 @@ export async function currentUser() {
   return data.session?.user || null;
 }
 
+export async function accessToken() {
+  if (!maybeSignedIn()) return null;
+  const { data } = await (await client()).auth.getSession();
+  return data.session?.access_token || null;
+}
+
+let ownedCache = null;
+// Set of bought product ids. Only for showing locks: the game server checks again on its own.
+export async function ownedProducts(fresh) {
+  if (ownedCache && !fresh) return ownedCache;
+  if (!await currentUser()) return new Set();
+  const { data, error } = await (await client()).from('entitlements').select('product_id');
+  if (error) throw error;
+  return (ownedCache = new Set(data.map(x => x.product_id)));
+}
+
 export async function signOut() {
+  ownedCache = null;
   const { error } = await (await client()).auth.signOut({ scope: 'local' });   // this browser only
   if (error) throw error;
 }

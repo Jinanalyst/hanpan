@@ -1,0 +1,5 @@
+project_id = "cdrbkealiuzrleheuvno"
+
+# checkout verifies the player's token itself; NOWPayments notices carry their own signature
+[functions.store]
+verify_jwt = false

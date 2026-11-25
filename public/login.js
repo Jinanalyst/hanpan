@@ -85,7 +85,7 @@ async function login(w) {
     if (error) throw error;
     showUser(data.user);
     status('Signed in. Opening the game…');
-    setTimeout(() => location.assign('./'), 700);
+    setTimeout(() => location.assign(new URLSearchParams(location.search).get('next') === 'store' ? 'store.html' : './'), 700);
   } catch (e) {
     console.warn('[login]', e);
     status(explain(e));

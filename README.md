@@ -11,13 +11,14 @@
 | 영역 | 내용 |
 |---|---|
 | 모드 | 팀 데스매치. 50킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
-| 전장 | 5곳 중 선택: Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins. Any land를 고르면 사람이 가장 많은 방에 들어감 |
+| 전장 | 무료 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
 | 무기 | 카빈(연사), 마크스맨 라이플(저격, 스코프), 권총. 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
 | 움직임 | 걷기, 달리기, 앉기, 점프, 정조준(ADS), 지형 충돌, 낮은 턱 자동으로 오르기 |
 | 네트워크 | 서버 권위형 판정, 20Hz 스냅샷, 클라이언트 예측 + 보간, **지연 보상**(쏜 사람 화면 기준으로 판정) |
 | 치트 방어(기본) | 이동 속도 검증 및 되돌리기, 발사 속도와 탄약을 서버가 관리, 조준 방향 검증, 메시지 크기·속도 제한 |
 | 봇 | 시야 판정, 반응 시간, 좌우 회피, 웨이포인트 순찰. 사람이 들어오면 봇이 자동으로 빠짐 |
 | UI | 미니맵, 킬피드, 스코어보드(Tab), 피격 방향 표시, 히트마커, 리스폰 화면 |
+| 상점 | 유료 무기 4종과 전장 3곳을 NOWPayments 암호화폐(SOL 등)로 구매. 온라인에서는 게임 서버가 소유 여부를 확인하고, 연습 모드에서는 모두 무료로 체험 |
 | 로그인(선택) | 솔라나 지갑 서명으로 로그인(Supabase Auth). 로그인하지 않아도 게스트로 플레이 가능 |
 | 연습 모드 | 서버 없이 브라우저에서 봇과 대전. 서버와 **같은 게임 코드**를 그대로 실행 |
 
@@ -86,19 +87,35 @@ location / {
 
 설정이 비어 있으면 로그인 링크가 숨겨지고 게임은 그대로 동작합니다. 지금은 화면에서 로그인 상태만 확인합니다. 전적이나 보상을 계정에 저장하려면 게임 서버에서 토큰을 검증하는 단계를 추가해야 합니다.
 
+## 상점 (NOWPayments)
+
+1. `supabase/migrations`의 SQL을 Hanpan 프로젝트에 적용하고 `supabase/functions/store`를 배포합니다(`verify_jwt` 끔).
+2. Supabase 대시보드 → **Edge Functions → Secrets**에 `NOWPAYMENTS_API_KEY`와 `NOWPAYMENTS_IPN_SECRET`을 넣습니다. **이 두 값은 코드, GitHub, 채팅에 절대 넣지 마세요.**
+3. NOWPayments 대시보드에서 정산 지갑을 설정하고, SOL을 결제 통화로 켭니다.
+
+- 가격 변경: `update public.products set price_usd = 3.99 where id = 'weapon:smg';` 판매 중지: `set active = false`.
+- 확인이 필요한 결제: `select * from public.orders where status in ('review', 'partial', 'duplicate') or note is not null;`
+- 상품은 NOWPayments 서명과 결제 조회를 모두 통과하고 상태가 `finished`일 때만 지급됩니다.
+- 상품을 추가할 때는 `weapons.js` 또는 `map.js`에 `product`를 넣고, 같은 id를 `products` 테이블에도 추가하세요.
+
 ## 구조
 
 ```
 server/index.js          HTTP 정적 파일 + WebSocket, 방 배정, 30Hz 틱
 public/index.html        클라이언트 페이지
 public/login.html/.js    솔라나 지갑 로그인 페이지
+public/store.html/.js    상점 페이지
+public/floorplan.js      전장 미니 평면도
+server/owned.js          플레이어가 가진 상품 조회 (비밀 키 불필요)
+supabase/migrations/     상점 DB 테이블, 권한, 함수
+supabase/functions/store 결제 생성과 결제 알림 처리 (Edge Function)
 public/auth.js           Supabase 세션 (로그인 페이지와 메뉴가 같이 씀)
 public/config.js         Supabase 주소와 공개 키
 public/vendor/           supabase-js (고정 버전)
 public/client.js         렌더링(Three.js), 입력, 예측·보간, HUD, 사운드
 public/shared/game.js    매치 규칙, 판정, 봇 AI (서버와 연습 모드가 같이 씀)
 public/shared/physics.js 이동·충돌·레이캐스트 (서버와 클라이언트가 같이 씀)
-public/shared/map.js     전장 5곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
+public/shared/map.js     전장 8곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
 public/shared/weapons.js 무기 수치
 test/smoke.js            스모크 테스트
 ```
@@ -107,7 +124,7 @@ test/smoke.js            스모크 테스트
 
 ## 프로토콜 (JSON over WebSocket `/ws`)
 
-클라이언트 → 서버: `join{name,lo,map}`(map은 전장 id 또는 `any`), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `po{s}`(핑 응답)
+클라이언트 → 서버: `join{name,lo,map,token}`(map은 전장 id 또는 `any`, token은 로그인한 경우의 Supabase 토큰), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `po{s}`(핑 응답)
 서버 → 클라이언트: `welcome`, `tp`(위치 강제 이동), `s`(스냅샷), `ro`(명단), `sh`(다른 사람 사격), `hit`, `dmg`, `k`(킬), `rl`(장전 시작), `end`/`start`, `pi`(핑)
 
 ## 실제 서비스 전에 해야 할 것 (우선순위 순서)

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Room } from '../public/shared/game.js';
-import { isMap, randomMap, DEFAULT_MAP } from '../public/shared/map.js';
+import { isMap, canPlay, randomMap, DEFAULT_MAP } from '../public/shared/map.js';
+import { ownedBy } from './owned.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 // Some hosts (Hostinger, LiteSpeed, Passenger) pass a socket path instead of a number, so keep it as-is.
@@ -39,13 +40,13 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8192 });
 
-// Each room plays one land. 'any' joins the busiest open room, whatever its land.
-function pickRoom(want) {
+// Each room plays one land. 'any' joins the busiest open room on a land this player may use.
+function pickRoom(want, owned) {
   const any = want === 'any';
-  const map = isMap(want) ? want : any ? randomMap() : DEFAULT_MAP;
-  let r = rooms.filter(r => (any || r.map.id === map) && r.humanCount() < MAX_PER_ROOM)
+  const map = isMap(want) ? want : any ? randomMap(owned) : DEFAULT_MAP;
+  let r = rooms.filter(r => (any ? canPlay(r.map.id, owned) : r.map.id === map) && r.humanCount() < MAX_PER_ROOM)
     .sort((a, b) => b.humanCount() - a.humanCount())[0];
   if (!r) {
     r = new Room({ id: 'room-' + roomSeq++, map, minPlayers: MIN_PLAYERS, maxPlayers: MAX_PER_ROOM });
@@ -55,8 +56,8 @@ function pickRoom(want) {
 }
 
 wss.on('connection', ws => {
-  let room = null, id = 0, count = 0, windowStart = Date.now();
-  ws.on('message', buf => {
+  let room = null, joining = false, id = 0, count = 0, windowStart = Date.now();
+  ws.on('message', async buf => {
     const t = Date.now();
     if (t - windowStart > 1000) { windowStart = t; count = 0; }
     if (++count > 150) { ws.close(1008, 'rate limit'); return; }   // ~20 inputs + ~12 shots per second is normal
@@ -64,13 +65,22 @@ wss.on('connection', ws => {
     try { m = JSON.parse(buf.toString()); } catch { return; }
     if (!m || typeof m.t !== 'string') return;
     if (m.t === 'join') {
-      if (room) return;
-      room = pickRoom(m.map);
-      id = room.addPlayer(m.name, m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); });
+      if (room || joining) return;
+      joining = true;
+      const found = m.token ? await ownedBy(m.token) : null, owned = found || new Set();
+      joining = false;
+      if (ws.readyState !== 1) return;                                     // left while we were checking
+      if (isMap(m.map) && !canPlay(m.map, owned)) {                        // paid land this player does not own
+        ws.send(JSON.stringify({ t: 'deny', why: m.token && !found ? 'check' : 'land' }));
+        ws.close(1000);
+        return;
+      }
+      room = pickRoom(m.map, owned);
+      id = room.addPlayer(typeof m.name === 'string' ? m.name : '', m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }, owned);
       console.log(`[join] ${room.id} ${room.map.id} #${id} (${room.humanCount()} humans)`);
       return;
     }
-    if (room) room.onMessage(id, m);
+    if (room) try { room.onMessage(id, m); } catch { ws.close(1008, 'bad message'); }   // one bad client must not stop the server
   });
   ws.on('close', () => {
     if (!room) return;

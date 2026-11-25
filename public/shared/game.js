@@ -2,7 +2,7 @@
 // the browser runs the same code for offline practice.
 import { getMap, randomRoute } from './map.js';
 import { PHYS, step, rayMap, dirFrom, hits, hitbox } from './physics.js';
-import { WEAPONS } from './weapons.js';
+import { WEAPONS, isPrimary, damageAt } from './weapons.js';
 
 export const MATCH_TIME = 600;   // seconds
 export const KILL_LIMIT = 50;
@@ -41,25 +41,30 @@ export class Room {
   botCount() { return this.players.size - this.humanCount(); }
   teamSize(t) { let n = 0; for (const p of this.players.values()) if (p.team === t) n++; return n; }
 
-  newPlayer(name, lo, bot, send) {
+  // owned: Set of bought product ids, or 'all' (bots and offline practice)
+  canUse(p, w) { const id = WEAPONS[w].product; return !id || p.owned === 'all' || p.owned.has(id); }
+  pickPrimary(p, lo) { return isPrimary(lo) && this.canUse(p, lo) ? lo : 'rifle'; }
+
+  newPlayer(name, lo, bot, send, owned = new Set()) {
     const id = this.seq++;
     const team = this.teamSize('red') <= this.teamSize('blue') ? 'red' : 'blue';
     const p = {
-      id, name: bot ? name : cleanName(name), team, bot, send: send || (() => {}),
-      lo: lo === 'sniper' ? 'sniper' : 'rifle', k: 0, d: 0,
+      id, name: bot ? name : cleanName(name), team, bot, send: send || (() => {}), owned: bot ? 'all' : owned,
+      lo: 'rifle', k: 0, d: 0,
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
       ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05) } : null,
     };
+    p.lo = this.pickPrimary(p, lo);
     this.players.set(id, p);
     return p;
   }
 
-  addPlayer(name, lo, send) {
-    const p = this.newPlayer(name, lo, false, send);
+  addPlayer(name, lo, send, owned) {
+    const p = this.newPlayer(name, lo, false, send, owned);
     this.spawn(p);
-    p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, map: this.map.id, limit: this.killLimit });
+    p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, map: this.map.id, lo: p.lo, limit: this.killLimit });
     this.balanceBots();
     this.roster();
     return p.id;
@@ -148,7 +153,7 @@ export class Room {
       case 'w':
         if (p.alive && (m.w === p.lo || m.w === 'pistol') && m.w !== p.w) { p.w = m.w; p.rlT = 0; p.next = t + 0.35; }
         break;
-      case 'lo': p.lo = m.lo === 'sniper' ? 'sniper' : 'rifle'; break;
+      case 'lo': p.lo = this.pickPrimary(p, m.lo); break;
       case 'po': if (Number.isFinite(m.s)) p.ping = clampN(t - m.s, 0, 1); break;
     }
   }
@@ -166,30 +171,39 @@ export class Room {
     p.next = t + W.rate * 0.9;
     p.prot = 0;
     const o = [p.x, p.y + (p.cr ? PHYS.eyec : PHYS.eye), p.z];
-    const d = dirFrom(yaw, clampN(pitch, -1.5, 1.5));
-    let bt = rayMap(o, d, this.map.boxes, W.range), best = null;
     // lag compensation: test targets where the shooter saw them
     const rt = t - (p.bot ? 0 : Math.min(0.3, p.ping / 2 + 0.1));
-    for (const q of this.players.values()) {
-      if (q === p || !q.alive || q.team === p.team) continue;
-      const h = hitbox(o, d, this.posAt(q, rt));
-      if (h.t < bt) { bt = h.t; best = { q, head: h.head }; }
+    const targets = [];
+    for (const q of this.players.values()) if (q !== p && q.alive && q.team !== p.team) targets.push([q, this.posAt(q, rt)]);
+    const ends = [], tally = new Map();   // target -> { dmg, head } summed over pellets
+    for (let i = 0; i < (W.pellets || 1); i++) {
+      const s = W.pellets ? W.pelletSpread : 0;   // pellets scatter on the server so clients cannot choose the pattern
+      const d = dirFrom(yaw + rnd(-s, s), clampN(pitch + rnd(-s, s), -1.5, 1.5));
+      let bt = rayMap(o, d, this.map.boxes, W.range), best = null, head = false;
+      for (const [q, at] of targets) {
+        const h = hitbox(o, d, at);
+        if (h.t < bt) { bt = h.t; best = q; head = h.head; }
+      }
+      ends.push([o[0] + d[0] * bt, o[1] + d[1] * bt, o[2] + d[2] * bt].map(r2));
+      if (!best) continue;
+      const e = tally.get(best) || { dmg: 0, head: false };
+      e.dmg += damageAt(W, bt, head); e.head ||= head;
+      tally.set(best, e);
     }
-    const end = [o[0] + d[0] * bt, o[1] + d[1] * bt, o[2] + d[2] * bt].map(r2);
-    this.broadcast({ t: 'sh', id: p.id, w: p.w, o: o.map(r2), e: end, hit: best ? 1 : 0 }, p.id);
-    if (!best) return;
-    const q = best.q;
+    const shot = { t: 'sh', id: p.id, w: p.w, o: o.map(r2), e: ends[0], hit: tally.size ? 1 : 0 };
+    if (ends.length > 1) shot.m = ends.slice(1);
+    this.broadcast(shot, p.id);
+    for (const [q, e] of tally) this.damage(p, q, Math.round(e.dmg), e.head);
+  }
+
+  damage(p, q, dmg, head) {
     if (q.bot) { q.ai.hurtBy = p.id; q.ai.scan = 0; }
     if (q.prot > 0) return;
-    let dmg = W.dmg * (best.head ? W.head : 1);
-    const [f0, f1, fm] = W.fall;
-    if (bt > f0) dmg *= Math.max(fm, 1 - (bt - f0) / (f1 - f0) * (1 - fm));
-    dmg = Math.round(dmg);
     q.hp -= dmg;
     const kill = q.hp <= 0;
-    p.send({ t: 'hit', head: best.head ? 1 : 0, kill: kill ? 1 : 0, dmg });
+    p.send({ t: 'hit', head: head ? 1 : 0, kill: kill ? 1 : 0, dmg });
     q.send({ t: 'dmg', from: [r2(p.x), r2(p.z)], hp: Math.max(0, q.hp) });
-    if (kill) this.kill(q, p, best.head);
+    if (kill) this.kill(q, p, head);
   }
 
   posAt(q, t) {

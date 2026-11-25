@@ -1,8 +1,11 @@
 // Smoke tests: hit detection, bot matches, and a real WebSocket join against the server.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
 import { Room } from '../public/shared/game.js';
-import { getMap, MAP_IDS } from '../public/shared/map.js';
+import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
+import { WEAPONS, damageAt } from '../public/shared/weapons.js';
 import { hits, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
 
@@ -90,15 +93,43 @@ for (const id of MAP_IDS) {
   console.log(`ok  ${id}: ${kills} bot kills in 2 simulated minutes (red ${room.score.red} / blue ${room.score.blue}), stuck ${slow}/${legs}`);
 }
 
-// 4) Real server: two clients join, receive snapshots, see each other in the roster
+// 4) Store: paid weapons are fair, locked without ownership, and every product is in the database catalogue
+{
+  const ttk = (W, d) => (Math.ceil(100 / Math.round(damageAt(W, d, false) * (W.pellets || 1))) - 1) * W.rate;
+  const paid = Object.keys(WEAPONS).filter(k => WEAPONS[k].product);
+  for (const k of paid) for (let d = 1; d <= 120; d++) assert.ok(ttk(WEAPONS[k], d) >= ttk(WEAPONS.rifle, d) - 1e-9, `${k} does not beat the Carbine at ${d} m`);
+  const sql = fs.readFileSync(new URL('../supabase/migrations/20261125055445_store.sql', import.meta.url), 'utf8');
+  for (const id of [...paid.map(k => WEAPONS[k].product), ...MAP_LIST.filter(m => m.product).map(m => m.product)]) assert.ok(sql.includes(`('${id}',`), id + ' is in the catalogue');
+  const room = new Room({ minPlayers: 0 }), sent = [];
+  const pl = (lo, owned) => room.players.get(room.addPlayer('P', lo, m => sent.push(m), owned));
+  assert.equal(pl('smg').lo, 'rifle', 'not owned: falls back to the Carbine');
+  assert.equal(pl('smg', new Set(['weapon:smg'])).lo, 'smg');
+  assert.equal(pl('lmg', new Set(['weapon:smg'])).lo, 'rifle');
+  assert.equal(pl('lmg', 'all').lo, 'lmg', 'practice');
+  for (const bad of ['pistol', '__proto__', 'constructor', null, {}]) assert.equal(pl(bad, 'all').lo, 'rifle');
+  const x = pl('smg');
+  room.onMessage(x.id, { t: 'w', w: 'smg' }); assert.equal(x.w, 'rifle', 'cannot switch to a locked weapon');
+  room.onMessage(x.id, { t: 'lo', lo: 'smg' }); room.spawn(x); assert.equal(x.w, 'rifle', 'cannot respawn with a locked weapon');
+  // shotgun: pellets add up to one hit report
+  const r2 = new Room({ minPlayers: 0 }), got = [];
+  const A = r2.players.get(r2.addPlayer('A', 'shotgun', m => got.push(m), 'all')), B = r2.players.get(r2.addPlayer('B', 'rifle', () => {}));
+  Object.assign(A, { x: 0, y: 0, z: 30, yaw: 0, prot: 0 }); Object.assign(B, { x: 0, y: 0, z: 28, prot: 0 });
+  r2.fire(A, 0, -0.2);
+  const h = got.filter(m => m.t === 'hit');
+  assert.equal(h.length, 1); assert.ok(B.hp < 100 && B.hp >= 10, 'a blast hurts but never kills outright'); assert.equal(h[0].dmg, 100 - B.hp); assert.equal(A.mag.shotgun, 5);
+  console.log('ok  store: fair weapons, locks, catalogue, shotgun');
+}
+
+// 5) Real server: two clients join, receive snapshots, see each other in the roster
 {
   const port = 3999;
-  const srv = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(port), MIN_PLAYERS: '6' }, stdio: 'pipe' });
+  const sb = http.createServer((q, r) => { const ok = q.headers.authorization === 'Bearer a.b.owner'; r.writeHead(ok ? 200 : 401); r.end(ok ? '[{"product_id":"land:palace"},{"product_id":"weapon:dmr"}]' : '{}'); }).listen(3998);
+  const srv = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(port), MIN_PLAYERS: '6', SUPABASE_URL: 'http://localhost:3998', SUPABASE_KEY: 'test' }, stdio: 'pipe' });
   await sleep(700);
-  const join = (name, map) => new Promise((res, rej) => {
+  const join = (name, map, token, lo = 'rifle') => new Promise((res, rej) => {
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
     const got = [];
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, lo: 'rifle', map })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, lo, map, token })));
     ws.on('message', d => got.push(JSON.parse(d)));
     ws.on('error', rej);
     setTimeout(() => res({ ws, got }), 1200);
@@ -124,10 +155,24 @@ for (const id of MAP_IDS) {
     assert.deepEqual(extra.map(land), ['frost', 'compound', 'compound']);
     const after = await (await fetch(`http://localhost:${port}/status`)).json();
     assert.deepEqual(after.rooms.map(r => [r.map, r.humans]), [['compound', 4], ['frost', 1]]);
-    for (const c of [c1, c2, ...extra]) c.ws.close();
-    console.log('ok  server: join, snapshots, roster, status, static files, land choice');
+    // paid land and weapon: only for the owner, decided on the server
+    const [own, guest, forged, gun] = await Promise.all([join('Own', 'palace', 'a.b.owner', 'dmr'), join('Guest', 'palace', undefined, 'dmr'), join('Forged', 'palace', 'a.b.forged'), join('Gun', 'harbor', undefined, 'dmr')]);
+    const w = own.got.find(m => m.t === 'welcome');
+    assert.deepEqual([w.map, w.lo], ['palace', 'dmr']);
+    assert.deepEqual(guest.got, [{ t: 'deny', why: 'land' }]);
+    assert.deepEqual(forged.got, [{ t: 'deny', why: 'check' }]);
+    assert.equal(gun.got.find(m => m.t === 'welcome').lo, 'rifle');
+    for (let i = 0; i < 3; i++) assert.notEqual(land(await join('Any' + i, 'any')), 'palace', 'any never opens a locked land');
+    // malformed messages must not stop the server
+    gun.ws.send('{"t":"f","yaw":{"valueOf":1,"toString":1}}'); gun.ws.send('null'); gun.ws.send('[]');
+    const odd = await join({ toString: 1 }, 'frost');
+    assert.ok(odd.got.find(m => m.t === 'welcome'), 'odd name accepted as default');
+    assert.equal(await (await fetch(`http://localhost:${port}/healthz`)).text(), 'ok');
+    for (const c of [c1, c2, ...extra, own, gun, odd]) c.ws.close();
+    console.log('ok  server: join, snapshots, roster, status, static files, land choice, paid land and weapon checks, bad messages');
   } finally {
     srv.kill();
+    sb.close(); sb.closeAllConnections();
   }
 }
 console.log('all smoke tests passed');
