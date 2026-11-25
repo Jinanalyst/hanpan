@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The letter ㅎ (from 한판) as a helmeted soldier; the ring is a gunsight, half Red and half Blue -->
+  <rect width="64" height="64" rx="8" fill="#161910"/>
+  <path d="M27 6h10l2 2v3.5H25V8zM15 14.5h34l3 3v3H12v-3z" fill="#d8c9a3"/>
+  <path d="M30 23.115A17.5 17.5 0 0 0 30 57.885V50.298A10 10 0 0 1 30 30.702Z" fill="#d9452b"/>
+  <path d="M34 23.115A17.5 17.5 0 0 1 34 57.885V50.298A10 10 0 0 0 34 30.702Z" fill="#2f7fd6"/>
+  <circle cx="32" cy="40.5" r="4" fill="#d8c9a3"/>
+</svg>

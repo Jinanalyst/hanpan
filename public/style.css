@@ -60,6 +60,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:#1d2016;color:var(--in
 .ov[hidden]{display:none}
 .card{background:var(--olive);border:2px solid #5b6240;border-radius:4px;padding:26px 28px;width:min(760px,100%);box-shadow:0 20px 60px rgba(0,0,0,.6);max-height:100%;overflow:auto}
 .card h1{font:400 clamp(36px,8vw,52px)/1 'Black Ops One',sans-serif;margin:0;color:var(--tan)}
+.logo{width:1.1em;height:1.1em;margin-right:.28em;vertical-align:-.17em}
 .card h2{font:400 28px 'Black Ops One',sans-serif;margin:0 0 6px;color:var(--tan)}
 .tag{margin:6px 0 18px;opacity:.85}
 label,.lbl{display:block;font-size:14px;color:var(--tan);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.05em}
@@ -117,7 +118,7 @@ a:focus-visible{outline:3px solid #ffd54a;outline-offset:2px}
 /* store */
 .storePage{overflow:auto;height:auto;min-height:100%;background:#1d2016}
 .storeTop{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px max(20px,calc(50vw - 520px));background:var(--olive);border-bottom:2px solid #5b6240}
-.storeTop a{color:var(--tan)}.storeTop nav{display:flex;gap:18px}.brand{font:400 30px 'Black Ops One',sans-serif;text-decoration:none}
+.storeTop a{color:var(--tan)}.storeTop nav{display:flex;gap:18px}.brand{font:400 30px 'Black Ops One',sans-serif;text-decoration:none;white-space:nowrap}
 .store{max-width:1080px;margin:0 auto;padding:8px 20px 40px}
 .store h2{font:400 28px 'Black Ops One',sans-serif;color:var(--tan);margin:26px 0 2px}.store .sub{margin:0 0 14px;opacity:.85}
 .store #status:empty{display:none}
@@ -222,3 +223,4 @@ button.srv{background:none;border-color:transparent;padding:4px 8px}button.srv:h
 
 /* credit for real city lands: always on top, also over the menu */
 #osm{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:20}#osm .osm{display:block;padding:1px 8px;background:rgba(255,255,255,.82);color:#16324a;font:500 12px/1.5 Rajdhani,sans-serif;text-decoration:none;border-radius:3px 3px 0 0}#osm .osm:hover{text-decoration:underline}
+@media(max-width:620px){.storeTop .brand{font-size:0}.storeTop .brand .logo{display:block;width:42px;height:42px;margin:0}}
