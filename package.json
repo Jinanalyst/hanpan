@@ -5,9 +5,14 @@
   "type": "module",
   "description": "Browser team deathmatch FPS with an authoritative Node server and bots",
   "scripts": {
-    "start": "node server/index.js",
+    "start": "node app.cjs",
     "test": "node test/smoke.js"
   },
-  "engines": { "node": ">=18" },
-  "dependencies": { "ws": "^8.18.0" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "main": "app.cjs"
 }

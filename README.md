@@ -32,7 +32,7 @@ npm test             # 판정·봇·서버 접속 스모크 테스트
 ## 호스팅어 비즈니스 플랜에 올리기
 
 1. hPanel → **Websites** → **Add Website** → **Node.js web app** → GitHub 저장소 `Jinanalyst/hanpan` 연결
-2. 빌드 설정: Install `npm install`, Start `npm start`(빌드 명령은 없음), Node 20 이상
+2. 빌드 설정: Framework `Other`, Build command `None`, **Entry file `app.cjs`**, Node 20 이상(18도 동작)
 3. 도메인 `hanpan.team` 연결
 4. 배포 후 hanpan.team에서 **Play online**을 눌러 보세요.
    - 게임이 시작되면 성공입니다. 왼쪽 위 ping 값으로 속도를 확인하세요.

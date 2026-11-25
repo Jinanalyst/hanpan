@@ -7,7 +7,8 @@ import { WebSocketServer } from 'ws';
 import { Room } from '../public/shared/game.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
-const PORT = +process.env.PORT || 3000;
+// Some hosts (Hostinger, LiteSpeed, Passenger) pass a socket path instead of a number, so keep it as-is.
+const PORT = process.env.PORT || 3000;
 const MAX_PER_ROOM = +process.env.MAX_PER_ROOM || 12;   // humans per room
 const MIN_PLAYERS = +process.env.MIN_PLAYERS || 6;      // bots fill rooms up to this size
 const MIME = {
