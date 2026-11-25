@@ -18,6 +18,7 @@
 | 치트 방어(기본) | 이동 속도 검증 및 되돌리기, 발사 속도와 탄약을 서버가 관리, 조준 방향 검증, 메시지 크기·속도 제한 |
 | 봇 | 시야 판정, 반응 시간, 좌우 회피, 웨이포인트 순찰. 사람이 들어오면 봇이 자동으로 빠짐 |
 | UI | 미니맵, 킬피드, 스코어보드(Tab), 피격 방향 표시, 히트마커, 리스폰 화면 |
+| 로그인(선택) | 솔라나 지갑 서명으로 로그인(Supabase Auth). 로그인하지 않아도 게스트로 플레이 가능 |
 | 연습 모드 | 서버 없이 브라우저에서 봇과 대전. 서버와 **같은 게임 코드**를 그대로 실행 |
 
 ## 로컬 실행
@@ -77,11 +78,23 @@ location / {
 
 상태 확인: `GET /healthz`(헬스체크), `GET /status`(방 목록, 인원, 점수).
 
+## 솔라나 지갑 로그인 (Supabase)
+
+1. Supabase 대시보드 → **Authentication → Sign In / Providers → Web3 Wallet**에서 Solana를 켭니다.
+2. **Authentication → URL Configuration**에서 Site URL을 `https://hanpan.team`으로, Redirect URLs에 `https://hanpan.team/**`를 넣습니다(로컬 테스트는 `http://localhost:3000/**`).
+3. **Project Settings → API**의 Project URL과 publishable(또는 anon) 키를 `public/config.js`에 넣습니다. 이 두 값은 공개되어도 되는 값입니다. **secret / service_role 키는 절대 넣지 마세요.**
+
+설정이 비어 있으면 로그인 링크가 숨겨지고 게임은 그대로 동작합니다. 지금은 화면에서 로그인 상태만 확인합니다. 전적이나 보상을 계정에 저장하려면 게임 서버에서 토큰을 검증하는 단계를 추가해야 합니다.
+
 ## 구조
 
 ```
 server/index.js          HTTP 정적 파일 + WebSocket, 방 배정, 30Hz 틱
 public/index.html        클라이언트 페이지
+public/login.html/.js    솔라나 지갑 로그인 페이지
+public/auth.js           Supabase 세션 (로그인 페이지와 메뉴가 같이 씀)
+public/config.js         Supabase 주소와 공개 키
+public/vendor/           supabase-js (고정 버전)
 public/client.js         렌더링(Three.js), 입력, 예측·보간, HUD, 사운드
 public/shared/game.js    매치 규칙, 판정, 봇 AI (서버와 연습 모드가 같이 씀)
 public/shared/physics.js 이동·충돌·레이캐스트 (서버와 클라이언트가 같이 씀)

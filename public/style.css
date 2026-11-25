@@ -85,3 +85,16 @@ details{margin-top:8px;font-size:15px}summary{cursor:pointer;color:var(--tan)}de
 .small{font-size:13px;opacity:.7}.small-card{width:min(380px,100%)}
 
 @media(max-height:760px){.lands small{display:none}#menu .card{padding:14px 24px}#menu .card h1{font-size:32px}#menu .tag{margin:2px 0 0}#menu label,#menu .lbl{margin:7px 0 3px}#menu .go{bottom:-14px;margin-top:4px;padding:6px 0}#menu button,#nameIn{min-height:38px}.lands .any{font-size:24px}}
+
+/* wallet login */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#account{display:flex;align-items:center;gap:8px;font-size:15px}#account a,.links a{color:var(--tan)}#account button{min-height:32px;font-size:14px;padding:0 10px}
+.loginPage{background:radial-gradient(circle at 50% 30%,#4a5133,#1d2016 70%)}
+.loginPage .ov{overflow:auto}.loginPage [hidden]{display:none}
+.wallets{display:grid;gap:8px}.wallets button{display:flex;align-items:center;gap:12px;min-height:52px;font-size:18px}
+.wallets img{width:28px;height:28px;border-radius:6px}
+button:disabled{opacity:.5;cursor:default}
+a.btn{display:flex;align-items:center;justify-content:center;min-height:44px;font-weight:700;border-radius:3px;border:1px solid #5b6240;background:#262a1b;color:var(--ink);text-decoration:none;padding:0 14px}
+a.btn.primary{background:var(--red);border-color:var(--red);color:#fff}
+a:focus-visible{outline:3px solid #ffd54a;outline-offset:2px}
+#guest{margin-top:8px}

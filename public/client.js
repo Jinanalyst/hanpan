@@ -4,6 +4,7 @@ import { getMap, isMap, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js
 import { PHYS, step, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS } from './shared/weapons.js';
 import { Room, cleanName } from './shared/game.js';
+import { configured, currentUser, maybeSignedIn, signOut, walletOf, shortWallet } from './auth.js';
 
 const $ = id => document.getElementById(id);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -727,6 +728,22 @@ $('landSeg').onclick = e => { const b = e.target.closest('button'); if (!b) retu
 loadMap(land);
 paintLand();
 const status = t => { $('status').textContent = t; };
+// wallet login (optional; guests can always play)
+function paintAccount(user) {
+  const box = $('account');
+  box.textContent = '';
+  if (!configured) return;
+  const a = document.createElement('a');
+  a.href = 'login.html';
+  if (user) { const w = walletOf(user); a.textContent = shortWallet(w); a.title = 'Signed in as ' + w; } else a.textContent = 'Log in with wallet';
+  box.append(a);
+  if (!user) return;
+  const out = document.createElement('button');
+  out.type = 'button'; out.textContent = 'Log out';
+  out.onclick = () => signOut().then(() => paintAccount(null), () => status('Could not log out. Try again.'));
+  box.append(out);
+}
+if (maybeSignedIn()) currentUser().then(paintAccount, () => paintAccount(null)); else paintAccount(null);
 function playerName() { const n = cleanName($('nameIn').value); store.set('hanpan-name', n); return n; }
 
 function enterGame() {
