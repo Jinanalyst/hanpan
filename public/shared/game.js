@@ -1,6 +1,6 @@
 // Authoritative match logic. Isomorphic: the Node server runs it for online play,
 // the browser runs the same code for offline practice.
-import { BOXES, SPAWNS, WAYPOINTS } from './map.js';
+import { getMap, randomRoute } from './map.js';
 import { PHYS, step, rayMap, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS } from './weapons.js';
 
@@ -21,6 +21,7 @@ export const cleanName = s => String(s || '').replace(/[^\p{L}\p{N} _\-]/gu, '')
 export class Room {
   constructor(o = {}) {
     this.id = o.id || 'local';
+    this.map = getMap(o.map);
     this.minPlayers = o.minPlayers ?? 6;   // bots fill up to this many players
     this.maxPlayers = o.maxPlayers ?? 12;
     this.killLimit = o.killLimit ?? KILL_LIMIT;
@@ -49,7 +50,7 @@ export class Room {
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
-      ai: bot ? { wp: null, scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05) } : null,
+      ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05) } : null,
     };
     this.players.set(id, p);
     return p;
@@ -58,7 +59,7 @@ export class Room {
   addPlayer(name, lo, send) {
     const p = this.newPlayer(name, lo, false, send);
     this.spawn(p);
-    p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, limit: this.killLimit });
+    p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, map: this.map.id, limit: this.killLimit });
     this.balanceBots();
     this.roster();
     return p.id;
@@ -97,7 +98,7 @@ export class Room {
   }
 
   spawn(p) {
-    const pts = SPAWNS[p.team];
+    const pts = this.map.spawns[p.team];
     let best = pts[0], bs = -1;
     for (const s of pts) {
       let m = 1e9;
@@ -112,6 +113,7 @@ export class Room {
     });
     p.mag = {}; p.res = {};
     for (const k of [p.lo, 'pistol']) { p.mag[k] = WEAPONS[k].mag; p.res[k] = WEAPONS[k].reserve; }
+    if (p.ai) p.ai.route = [];
     p.sp++;
     p.lastIn = now();
     p.send({ t: 'tp', x: p.x, y: p.y, z: p.z, yaw: p.yaw, sp: p.sp });
@@ -130,7 +132,7 @@ export class Room {
         const dt = Math.max(0.1, t - p.lastIn);
         p.lastIn = t;
         const max = PHYS.sprint * 1.5 * dt + 0.75;
-        if (Math.hypot(x - p.x, z - p.z) > max || y < -0.1 || y > 12 || hits(x, y + 0.05, z, PHYS.hc - 0.1, BOXES)) {
+        if (Math.hypot(x - p.x, z - p.z) > max || y < -0.1 || y > 12 || hits(x, y + 0.05, z, PHYS.hc - 0.1, this.map.boxes)) {
           p.sp++;
           p.send({ t: 'tp', x: p.x, y: p.y, z: p.z, yaw: p.yaw, sp: p.sp });
           return;
@@ -165,7 +167,7 @@ export class Room {
     p.prot = 0;
     const o = [p.x, p.y + (p.cr ? PHYS.eyec : PHYS.eye), p.z];
     const d = dirFrom(yaw, clampN(pitch, -1.5, 1.5));
-    let bt = rayMap(o, d, BOXES, W.range), best = null;
+    let bt = rayMap(o, d, this.map.boxes, W.range), best = null;
     // lag compensation: test targets where the shooter saw them
     const rt = t - (p.bot ? 0 : Math.min(0.3, p.ping / 2 + 0.1));
     for (const q of this.players.values()) {
@@ -302,7 +304,7 @@ export class Room {
         const c = [q.x, q.y + (q.cr ? 0.9 : 1.3), q.z], dir = [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
         const L = Math.hypot(dir[0], dir[1], dir[2]);
         dir[0] /= L; dir[1] /= L; dir[2] /= L;
-        if (rayMap(o, dir, BOXES, L) < L - 0.2) continue;
+        if (rayMap(o, dir, this.map.boxes, L) < L - 0.2) continue;
         bd = d; best = q;
       }
       if (best && best.id !== a.target) a.react = rnd(0.3, 0.7) + (bd > 30 ? 0.2 : 0);
@@ -326,21 +328,22 @@ export class Room {
         this.fire(b, b.yaw + rnd(-e, e), b.pitch + rnd(-e, e) * 0.6);
       }
     } else {
-      if (!a.wp || Math.hypot(a.wp[0] - b.x, a.wp[1] - b.z) < 1.5) a.wp = WAYPOINTS[Math.floor(Math.random() * WAYPOINTS.length)];
-      const dx = a.wp[0] - b.x, dz = a.wp[1] - b.z, d = Math.hypot(dx, dz) || 1;
+      while (a.route.length && Math.hypot(a.route[0][0] - b.x, a.route[0][1] - b.z) < 0.8) a.route.shift();
+      if (!a.route.length) a.route = randomRoute(this.map, b.x, b.z);
+      const wp = a.route[0], dx = wp[0] - b.x, dz = wp[1] - b.z, d = Math.hypot(dx, dz) || 1;
       ix = dx / d; iz = dz / d;
       b.yaw = wrapA(b.yaw + clampN(wrapA(Math.atan2(-dx, -dz) - b.yaw), -3 * dt, 3 * dt));
       b.pitch *= 0.9;
       if (b.mag[b.w] < WEAPONS[b.w].mag * 0.4) this.reload(b);
       a.stuckT += dt;
       if (a.stuckT > 1) {
-        if (Math.hypot(b.x - a.sx, b.z - a.sz) < 0.4) { a.wp = null; if (b.ground) b.vy = PHYS.jump; }
+        if (Math.hypot(b.x - a.sx, b.z - a.sz) < 0.4) { a.route = []; if (b.ground) b.vy = PHYS.jump; }
         a.stuckT = 0; a.sx = b.x; a.sz = b.z;
       }
     }
     const l = Math.hypot(ix, iz);
     if (l > 1) { ix /= l; iz /= l; }
     if (b.mag[b.w] === 0) this.reload(b);
-    step(b, ix, iz, speed, dt, BOXES);
+    step(b, ix, iz, speed, dt, this.map.boxes);
   }
 }

@@ -36,10 +36,11 @@
     <input id="nameIn" maxlength="16" autocomplete="off" spellcheck="false">
     <span class="lbl">Primary weapon</span>
     <div class="seg" id="loSeg"><button data-lo="rifle">Carbine</button><button data-lo="sniper">Marksman rifle</button></div>
+    <span class="lbl" id="landLbl">Land</span>
+    <div class="lands" id="landSeg" role="group" aria-labelledby="landLbl"></div>
     <label for="sensIn">Mouse sensitivity <output id="sensOut"></output></label>
     <input id="sensIn" type="range" min="0.5" max="3" step="0.1">
-    <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button></div>
-    <p id="status" role="status"></p>
+    <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button><p id="status" role="status"></p></div>
     <details><summary>Controls</summary>
       <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Space</b> jump</li>
       <li><b>Left click</b> fire · <b>Right click</b> aim down sights · <b>R</b> reload</li>

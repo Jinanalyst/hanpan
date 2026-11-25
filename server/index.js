@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Room } from '../public/shared/game.js';
+import { isMap, randomMap, DEFAULT_MAP } from '../public/shared/map.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 // Some hosts (Hostinger, LiteSpeed, Passenger) pass a socket path instead of a number, so keep it as-is.
@@ -24,7 +25,7 @@ const server = http.createServer((req, res) => {
   if (url === '/healthz') { res.writeHead(200); res.end('ok'); return; }
   if (url === '/status') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ rooms: rooms.map(r => ({ id: r.id, humans: r.humanCount(), bots: r.botCount(), phase: r.phase, score: r.score })) }));
+    res.end(JSON.stringify({ rooms: rooms.map(r => ({ id: r.id, map: r.map.id, humans: r.humanCount(), bots: r.botCount(), phase: r.phase, score: r.score })) }));
     return;
   }
   const file = path.normalize(path.join(ROOT, url === '/' ? 'index.html' : url));
@@ -38,10 +39,14 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
-function pickRoom() {
-  let r = rooms.find(r => r.humanCount() < MAX_PER_ROOM);
+// Each room plays one land. 'any' joins the busiest open room, whatever its land.
+function pickRoom(want) {
+  const any = want === 'any';
+  const map = isMap(want) ? want : any ? randomMap() : DEFAULT_MAP;
+  let r = rooms.filter(r => (any || r.map.id === map) && r.humanCount() < MAX_PER_ROOM)
+    .sort((a, b) => b.humanCount() - a.humanCount())[0];
   if (!r) {
-    r = new Room({ id: 'room-' + roomSeq++, minPlayers: MIN_PLAYERS, maxPlayers: MAX_PER_ROOM });
+    r = new Room({ id: 'room-' + roomSeq++, map, minPlayers: MIN_PLAYERS, maxPlayers: MAX_PER_ROOM });
     rooms.push(r);
   }
   return r;
@@ -58,9 +63,9 @@ wss.on('connection', ws => {
     if (!m || typeof m.t !== 'string') return;
     if (m.t === 'join') {
       if (room) return;
-      room = pickRoom();
+      room = pickRoom(m.map);
       id = room.addPlayer(m.name, m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); });
-      console.log(`[join] ${room.id} #${id} (${room.humanCount()} humans)`);
+      console.log(`[join] ${room.id} ${room.map.id} #${id} (${room.humanCount()} humans)`);
       return;
     }
     if (room) room.onMessage(id, m);

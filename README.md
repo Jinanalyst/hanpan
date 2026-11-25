@@ -11,6 +11,7 @@
 | 영역 | 내용 |
 |---|---|
 | 모드 | 팀 데스매치. 50킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
+| 전장 | 5곳 중 선택: Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins. Any land를 고르면 사람이 가장 많은 방에 들어감 |
 | 무기 | 카빈(연사), 마크스맨 라이플(저격, 스코프), 권총. 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
 | 움직임 | 걷기, 달리기, 앉기, 점프, 정조준(ADS), 지형 충돌, 낮은 턱 자동으로 오르기 |
 | 네트워크 | 서버 권위형 판정, 20Hz 스냅샷, 클라이언트 예측 + 보간, **지연 보상**(쏜 사람 화면 기준으로 판정) |
@@ -84,16 +85,16 @@ public/index.html        클라이언트 페이지
 public/client.js         렌더링(Three.js), 입력, 예측·보간, HUD, 사운드
 public/shared/game.js    매치 규칙, 판정, 봇 AI (서버와 연습 모드가 같이 씀)
 public/shared/physics.js 이동·충돌·레이캐스트 (서버와 클라이언트가 같이 씀)
-public/shared/map.js     맵(점대칭이라 양 팀이 공평), 스폰, 봇 웨이포인트
+public/shared/map.js     전장 5곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
 public/shared/weapons.js 무기 수치
 test/smoke.js            스모크 테스트
 ```
 
-밸런스 조정은 `weapons.js`, 맵 수정은 `map.js`의 `HALF` 배열만 고치면 됩니다. 맵은 자동으로 반대편에 대칭 복사됩니다.
+밸런스 조정은 `weapons.js`, 전장 수정은 `map.js`의 `DEFS`에서 해당 전장의 `half` 배열만 고치면 됩니다. 자동으로 반대편에 대칭 복사됩니다. `DEFS`에 항목을 추가하면 메뉴, 서버, 테스트에 새 전장이 자동으로 나타납니다.
 
 ## 프로토콜 (JSON over WebSocket `/ws`)
 
-클라이언트 → 서버: `join{name,lo}`, `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `po{s}`(핑 응답)
+클라이언트 → 서버: `join{name,lo,map}`(map은 전장 id 또는 `any`), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `po{s}`(핑 응답)
 서버 → 클라이언트: `welcome`, `tp`(위치 강제 이동), `s`(스냅샷), `ro`(명단), `sh`(다른 사람 사격), `hit`, `dmg`, `k`(킬), `rl`(장전 시작), `end`/`start`, `pi`(핑)
 
 ## 실제 서비스 전에 해야 할 것 (우선순위 순서)

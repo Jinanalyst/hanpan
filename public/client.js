@@ -1,6 +1,6 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
-import { BOXES } from './shared/map.js';
+import { getMap, isMap, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
 import { PHYS, step, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS } from './shared/weapons.js';
 import { Room, cleanName } from './shared/game.js';
@@ -16,6 +16,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 const V = new THREE.Vector3();
+let MAP = getMap(DEFAULT_MAP), BOXES = MAP.boxes;   // the land being shown or played; set by loadMap()
 
 /* ---------------- renderer + world ---------------- */
 const canvas = $('c');
@@ -34,26 +35,29 @@ cam.rotation.order = 'YXZ';
 const vmScene = new THREE.Scene();
 const vmCam = new THREE.PerspectiveCamera(60, 1, 0.01, 10);
 
-{ // sky dome
-  const g = new THREE.SphereGeometry(500, 32, 16), cols = [], top = new THREE.Color(0x4f86c6), hor = new THREE.Color(0xdce4ea), p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) { const c = hor.clone().lerp(top, Math.pow(Math.max(0, p.getY(i) / 500), 0.55)); cols.push(c.r, c.g, c.b); }
-  g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-  scene.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false })));
+const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+sky.geometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(sky.geometry.attributes.position.count * 3), 3));
+scene.add(sky);
+function paintSky(topC, horC) {
+  const p = sky.geometry.attributes.position, col = sky.geometry.attributes.color, top = new THREE.Color(topC), hor = new THREE.Color(horC), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) { c.copy(hor).lerp(top, Math.pow(Math.max(0, p.getY(i) / 500), 0.55)); col.setXYZ(i, c.r, c.g, c.b); }
+  col.needsUpdate = true;
 }
-scene.add(new THREE.HemisphereLight(0xdfe9f5, 0x6b5a40, 1.3));
+const hemi = new THREE.HemisphereLight(0xdfe9f5, 0x6b5a40, 1.3);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff0d8, 2.8);
 sun.position.set(35, 60, 20);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, near: 1, far: 160 });
+Object.assign(sun.shadow.camera, { left: -56, right: 56, top: 56, bottom: -56, near: 1, far: 180 });
 sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 const flashLight = new THREE.PointLight(0xffc070, 0, 8, 2);
 scene.add(flashLight);
-vmScene.add(new THREE.HemisphereLight(0xffffff, 0x554433, 2.2));
-{ const l = new THREE.DirectionalLight(0xfff0d8, 2.2); l.position.set(1, 2, 1); vmScene.add(l); }
+const vmHemi = new THREE.HemisphereLight(0xffffff, 0x554433, 2.2), vmSun = new THREE.DirectionalLight(0xfff0d8, 2.2);
+vmSun.position.set(1, 2, 1); vmScene.add(vmHemi, vmSun);
 const vmFlashLight = new THREE.PointLight(0xffb050, 0, 2);
 vmScene.add(vmFlashLight);
 
@@ -73,11 +77,6 @@ function speck(g, w, h, n, cols, smax = 3) {
   g.globalAlpha = 1;
 }
 const T = {
-  ground: ctex(512, 512, (g, w, h) => {
-    g.fillStyle = '#a8916b'; g.fillRect(0, 0, w, h);
-    speck(g, w, h, 9000, ['#8f7a57', '#b9a37c', '#7d6a4c', '#c4b08a'], 3);
-    for (let i = 0; i < 40; i++) { g.fillStyle = 'rgba(90,75,50,.14)'; g.beginPath(); g.ellipse(Math.random() * w, Math.random() * h, rnd(20, 60), rnd(10, 30), Math.random() * 3, 0, 7); g.fill(); }
-  }),
   concrete: ctex(256, 256, (g, w, h) => {
     g.fillStyle = '#9b9a93'; g.fillRect(0, 0, w, h);
     speck(g, w, h, 5000, ['#8a8a85', '#a8a8a2', '#7c7c77'], 2);
@@ -103,7 +102,42 @@ const T = {
     g.fillStyle = '#a3a29a'; g.fillRect(0, 0, w, h); speck(g, w, h, 2500, ['#8a8a85', '#b5b5ad'], 2);
     for (let x = -h; x < w; x += 32) { g.fillStyle = '#e0b52a'; g.beginPath(); g.moveTo(x, h); g.lineTo(x + 16, h); g.lineTo(x + 16 + 24, h - 24); g.lineTo(x + 24, h - 24); g.fill(); }
   }),
+  metal: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#8b9197'; g.fillRect(0, 0, w, h); speck(g, w, h, 2500, ['#7c8288', '#9aa0a6', '#8a7364'], 2);
+    g.strokeStyle = 'rgba(40,45,50,.45)'; g.lineWidth = 3; g.strokeRect(1, 1, w - 2, h - 2);
+    g.fillStyle = 'rgba(40,45,50,.5)'; for (const x of [14, w - 14]) for (let y = 14; y < h; y += 38) { g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); }
+  }),
+  panel: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#c9d2d8'; g.fillRect(0, 0, w, h); speck(g, w, h, 1800, ['#bcc6cd', '#d7dee3'], 2);
+    g.fillStyle = '#b4532f'; g.fillRect(0, h * 0.62, w, 22);
+    g.strokeStyle = 'rgba(60,75,85,.45)'; g.lineWidth = 3; for (let x = 0; x < w; x += 64) g.strokeRect(x, 1, 64, h - 2);
+  }),
+  brick: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#4d4643'; g.fillRect(0, 0, w, h);
+    for (let r = 0; r < 16; r++) for (let i = -1; i < 8; i++) { g.fillStyle = `hsl(${12 + Math.random() * 10},${24 + Math.random() * 10}%,${32 + Math.random() * 9}%)`; g.fillRect(i * 32 + (r % 2) * 16 + 1, r * 16 + 1, 30, 14); }
+  }),
+  stone: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#6f6d5c'; g.fillRect(0, 0, w, h);
+    for (let r = 0; r < 4; r++) for (let i = -1; i < 3; i++) { g.fillStyle = `hsl(52,${9 + Math.random() * 6}%,${50 + Math.random() * 10}%)`; g.fillRect(i * 128 + (r % 2) * 64 + 2, r * 64 + 2, 124, 60); }
+    speck(g, w, h, 2600, ['#7f7d6a', '#a09d88', '#66753f', '#5c6b3a'], 3);
+  }),
+  rock: ctex(256, 256, (g, w, h) => {
+    g.fillStyle = '#7b7c7c'; g.fillRect(0, 0, w, h); speck(g, w, h, 6000, ['#6b6c6d', '#8c8d8d', '#5c5d5f', '#999a99'], 7);
+  }),
+  snow: ctex(128, 128, (g, w, h) => { g.fillStyle = '#eef3f7'; g.fillRect(0, 0, w, h); speck(g, w, h, 900, ['#dbe4ec', '#ffffff', '#cfdae4'], 4); }),
+  wood: ctex(256, 256, (g, w, h) => {
+    for (let y = 0; y < h; y += 32) { g.fillStyle = `hsl(28,30%,${27 + Math.random() * 9}%)`; g.fillRect(0, y, w, 31); }
+    speck(g, w, h, 1500, ['#4d3a26', '#7d6243'], 3);
+  }),
+  cloth: ctex(128, 128, (g, w, h) => { for (let x = 0; x < w; x += 32) { g.fillStyle = x % 64 ? '#e8dcc2' : '#b23a2e'; g.fillRect(x, 0, 32, h); } }),
 };
+const groundTex = ([base, ...specks]) => ctex(512, 512, (g, w, h) => {
+  g.fillStyle = base; g.fillRect(0, 0, w, h);
+  speck(g, w, h, 9000, specks, 3);
+  g.fillStyle = specks[2]; g.globalAlpha = 0.14;
+  for (let i = 0; i < 40; i++) { g.beginPath(); g.ellipse(Math.random() * w, Math.random() * h, rnd(20, 60), rnd(10, 30), Math.random() * 3, 0, 7); g.fill(); }
+  g.globalAlpha = 1;
+});
 const containerTex = col => ctex(256, 256, (g, w, h) => {
   g.fillStyle = col; g.fillRect(0, 0, w, h);
   for (let x = 0; x < w; x += 16) { g.fillStyle = 'rgba(0,0,0,.2)'; g.fillRect(x, 0, 5, h); g.fillStyle = 'rgba(255,255,255,.08)'; g.fillRect(x + 7, 0, 3, h); }
@@ -112,7 +146,10 @@ const containerTex = col => ctex(256, 256, (g, w, h) => {
 });
 const std = o => new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, ...o });
 const MAT = {
-  perimeter: std({ map: T.concrete, color: 0xd6d1c6 }), wall: std({ map: T.concrete }), crate: std({ map: T.crate }),
+  crate: std({ map: T.crate }),
+  metal: std({ map: T.metal, roughness: 0.6, metalness: 0.3 }), panel: std({ map: T.panel, roughness: 0.7 }), brick: std({ map: T.brick }), stone: std({ map: T.stone }),
+  rock: std({ map: T.rock }), snow: std({ map: T.snow }), wood: std({ map: T.wood }), cloth: std({ map: T.cloth }), tree: std({ map: T.wood }), leaf: std({ color: 0x3f6b2e }),
+  neonM: new THREE.MeshBasicMaterial({ color: 0xff5fb4 }), neonC: new THREE.MeshBasicMaterial({ color: 0x5fe3ff }), neonY: new THREE.MeshBasicMaterial({ color: 0xffd75a }),
   sandbag: std({ map: T.sandbag }), barrier: std({ map: T.barrier }), barrel: std({ color: 0x46603d, roughness: 0.55, metalness: 0.35 }),
 };
 const CONT = ['#8c3b2a', '#2f5d7c', '#4c6b3a'].map(c => std({ map: containerTex(c), roughness: 0.7, metalness: 0.2 }));
@@ -123,29 +160,81 @@ function boxGeo(w, h, d, s) {
   for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const k = f * 4 + i; uv.setXY(k, uv.getX(k) * dims[f][0] / s, uv.getY(k) * dims[f][1] / s); }
   return g;
 }
-{
+const TEXM = { container: 3, sandbag: 2, barrier: 4, snow: 4, rock: 4, stone: 4, cloth: 1.5 };   // meters per texture repeat
+function buildWorld(map) {
+  const g = new THREE.Group(), th = map.theme;
+  const wall = std({ map: T.concrete, color: th.wall }), perim = std({ map: T.concrete, color: th.perimeter });
   let ci = 0;
-  for (const b of BOXES) {
+  for (const b of map.boxes) {
     const w = b.max[0] - b.min[0], h = b.max[1] - b.min[1], d = b.max[2] - b.min[2];
+    const x = (b.min[0] + b.max[0]) / 2, z = (b.min[2] + b.max[2]) / 2;
     let m;
     if (b.kind === 'barrel') m = new THREE.Mesh(new THREE.CylinderGeometry(w / 2, w / 2, h, 18), MAT.barrel);
-    else {
-      const s = b.kind === 'crate' ? Math.max(w, h, d) : b.kind === 'container' ? 3 : b.kind === 'sandbag' ? 2 : b.kind === 'barrier' ? 4 : 3;
-      m = new THREE.Mesh(boxGeo(w, h, d, s), b.kind === 'container' ? CONT[ci++ % 3] : MAT[b.kind] || MAT.wall);
+    else if (b.kind === 'tree') {
+      m = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.4, w * 0.5, h, 10), MAT.tree);
+      for (const [y, r] of [[h - 1.2, 2.4], [h + 0.4, 1.9], [h + 1.8, 1.2]]) {   // leaves are only for looks and sit above head height
+        const l = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), MAT.leaf);
+        l.scale.y = 0.6; l.position.set(x, y, z); l.castShadow = true; g.add(l);
+      }
+    } else {
+      const mat = b.kind === 'container' ? CONT[ci++ % 3] : b.kind === 'wall' ? wall : b.kind === 'perimeter' ? perim : MAT[b.kind] || wall;
+      m = new THREE.Mesh(boxGeo(w, h, d, b.kind === 'crate' ? Math.max(w, h, d) : TEXM[b.kind] || 3), mat);
     }
-    m.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
-    m.castShadow = m.receiveShadow = true;
-    scene.add(m);
+    m.position.set(x, (b.min[1] + b.max[1]) / 2, z);
+    m.castShadow = m.receiveShadow = !b.kind.startsWith('neon');
+    g.add(m);
   }
-  T.ground.repeat.set(65, 65);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), std({ map: T.ground }));
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
-  const far = std({ map: T.concrete, color: 0x8d8c86 });
+  const gt = groundTex(th.ground); gt.repeat.set(65, 65);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), std({ map: gt }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; g.add(ground);
+  const [shape, farC] = th.far, far = std({ map: T.concrete, color: farC }), lit = [MAT.neonM, MAT.neonC, MAT.neonY];
   for (let i = 0; i < 34; i++) { // distant structures for depth
-    const a = i / 34 * Math.PI * 2 + rnd(-0.05, 0.05), r = rnd(75, 140), w = rnd(8, 22), h = rnd(5, 18);
-    const m = new THREE.Mesh(boxGeo(w, h, rnd(8, 20), 4), far);
-    m.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r); m.rotation.y = rnd(0, 3); scene.add(m);
+    const a = i / 34 * Math.PI * 2 + rnd(-0.05, 0.05), r = rnd(78, 140), w = rnd(8, 22), h = shape === 'tower' ? rnd(14, 42) : rnd(5, 18);
+    const m = shape === 'peak' ? new THREE.Mesh(new THREE.ConeGeometry(w * 1.1, h * 1.6, 7), far) : new THREE.Mesh(boxGeo(w, h, rnd(8, 20), 4), far);
+    m.position.set(Math.cos(a) * r, shape === 'peak' ? h * 0.8 : h / 2, Math.sin(a) * r); m.rotation.y = rnd(0, 3); g.add(m);
+    if (shape === 'tower') {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, 0.8, 1), lit[i % 3]);
+      s.position.set(m.position.x * 0.88, h * rnd(0.4, 0.8), m.position.z * 0.88); s.lookAt(0, s.position.y, 0); g.add(s);
+    }
   }
+  for (const [x, y, z, c] of map.lights) { const l = new THREE.PointLight(c, 45, 18, 1.8); l.position.set(x, y, z); g.add(l); }
+  return g;
+}
+// falling snow, kept around the camera
+const SNOW_R = 22;
+const snow = new THREE.Points(
+  new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(Float32Array.from({ length: 1400 * 3 }, () => rnd(-SNOW_R, SNOW_R)), 3)),
+  new THREE.PointsMaterial({ color: 0xffffff, size: 0.09, transparent: true, opacity: 0.8, depthWrite: false }));
+snow.frustumCulled = false; snow.visible = false; scene.add(snow);
+function updateSnow(dt) {
+  if (!MAP.theme.snow) return;
+  const c = [cam.position.x, cam.position.y, cam.position.z];
+  // no snow under roofs
+  snow.visible = !BOXES.some(b => b.max[0] - b.min[0] > 6 && b.min[1] > c[1] && c[0] > b.min[0] && c[0] < b.max[0] && c[2] > b.min[2] && c[2] < b.max[2]);
+  const p = snow.geometry.attributes.position, a = p.array, span = SNOW_R * 2;
+  for (let i = 0; i < a.length; i += 3) {
+    a[i] += dt * 0.6; a[i + 1] -= dt * 2.2;
+    for (let k = 0; k < 3; k++) a[i + k] = c[k] + ((a[i + k] - c[k] + SNOW_R) % span + span) % span - SNOW_R;   // wrap around the camera
+  }
+  p.needsUpdate = true;
+}
+const worlds = {};
+let world = null;
+function loadMap(id) {
+  const next = getMap(id);
+  if (world && next === MAP) return;
+  MAP = next; BOXES = MAP.boxes;
+  if (world) world.visible = false;
+  if (!worlds[MAP.id]) { worlds[MAP.id] = buildWorld(MAP); scene.add(worlds[MAP.id]); }
+  world = worlds[MAP.id]; world.visible = true;
+  const th = MAP.theme;
+  paintSky(th.skyTop, th.skyHor);
+  scene.fog.color.set(th.fog[0]); scene.fog.near = th.fog[1]; scene.fog.far = th.fog[2];
+  hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
+  sun.color.set(th.sun[0]); sun.intensity = th.sun[1]; sun.position.set(...th.sun[2]);
+  vmHemi.intensity = vmSun.intensity = 2.2 * th.vm;
+  snow.visible = !!th.snow;
+  for (const m of [...tracers, ...decals, ...puffs]) m.visible = false;
 }
 
 /* ---------------- soldiers ---------------- */
@@ -356,7 +445,7 @@ function send(m) { if (net) net.send(m); }
 
 function onMsg(m) {
   switch (m.t) {
-    case 'welcome': myId = m.id; myTeam = m.team; buildVM(myTeam); break;
+    case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
     case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; break;
     case 's': onSnap(m); break;
     case 'ro': {
@@ -548,7 +637,7 @@ function drawMini() {
   mg.save(); mg.beginPath(); mg.arc(c, c, c - 2, 0, 7); mg.clip();
   mg.translate(c, c); mg.rotate(me.yaw); mg.scale(sc, sc); mg.translate(-me.x, -me.z);
   mg.fillStyle = 'rgba(216,201,163,.55)';
-  for (const b of BOXES) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
+  for (const b of BOXES) if (b.min[1] < 2) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
   const t = nowS();
   for (const [, o] of others) {
     if (!o.s.alive) continue;
@@ -609,6 +698,34 @@ sensIn.oninput = () => { sens = +sensIn.value; $('sensOut').textContent = sens.t
 function paintLo() { for (const b of $('loSeg').children) b.setAttribute('aria-pressed', b.dataset.lo === lo); }
 $('loSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; lo = b.dataset.lo; store.set('hanpan-lo', lo); paintLo(); };
 paintLo();
+let land = store.get('hanpan-land', DEFAULT_MAP);
+if (land !== 'any' && !isMap(land)) land = DEFAULT_MAP;
+function floorPlan(map) {
+  const c = document.createElement('canvas'), [hx, hz] = map.size, g = c.getContext('2d');
+  c.width = 160; c.height = 80;
+  // turned sideways so Red is on the left and Blue on the right
+  const k = Math.min(156 / (hz * 2), 76 / (hx * 2)), w = hz * 2 * k, h = hx * 2 * k;
+  g.translate(80, 40);
+  g.fillStyle = map.theme.ground[0]; g.fillRect(-w / 2, -h / 2, w, h);
+  g.fillStyle = 'rgba(15,17,12,.6)';
+  for (const b of map.boxes) if (b.min[1] < 2 && b.kind !== 'perimeter') g.fillRect(b.min[2] * k, -b.max[0] * k, (b.max[2] - b.min[2]) * k, (b.max[0] - b.min[0]) * k);
+  g.fillStyle = '#ff6a4d'; g.fillRect(-w / 2, -h / 2, 5, h);
+  g.fillStyle = '#5aa5ff'; g.fillRect(w / 2 - 5, -h / 2, 5, h);
+  return c;
+}
+for (const { id, name, desc } of [...MAP_LIST, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
+  const b = document.createElement('button'), n = document.createElement('b'), d = document.createElement('small');
+  b.type = 'button'; b.dataset.land = id; n.textContent = name; d.textContent = desc;
+  if (id === 'any') { const q = document.createElement('span'); q.className = 'any'; q.textContent = '?'; q.ariaHidden = 'true'; b.append(q); } else b.append(floorPlan(getMap(id)));
+  b.append(n, d); $('landSeg').append(b);
+}
+function paintLand() {
+  for (const b of $('landSeg').children) b.setAttribute('aria-pressed', b.dataset.land === land);
+  if (land !== 'any') loadMap(land);   // show the chosen land behind the menu
+}
+$('landSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; land = b.dataset.land; store.set('hanpan-land', land); paintLand(); };
+loadMap(land);
+paintLand();
 const status = t => { $('status').textContent = t; };
 function playerName() { const n = cleanName($('nameIn').value); store.set('hanpan-name', n); return n; }
 
@@ -619,13 +736,13 @@ function enterGame() {
 }
 function leaveGame(msg = '') {
   if (net) { const n = net; net = null; n.close(); }
-  inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg);
+  inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
   for (const [, o] of others) scene.remove(o.g); others.clear();
 }
 $('practice').onclick = () => {
   audio(); lock();
-  const room = new Room({ id: 'practice', minPlayers: 8 });
+  const room = new Room({ id: 'practice', minPlayers: 8, map: land === 'any' ? randomMap() : land });
   let live = true;
   const id = room.addPlayer(playerName(), lo, m => queueMicrotask(() => live && onMsg(m)));
   const timer = setInterval(() => room.update(1 / 30), 1000 / 30);
@@ -642,7 +759,7 @@ $('online').onclick = () => {
   const to = setTimeout(() => { if (!opened) { ws.close(); status('No game server found at this address. Try Practice, or deploy the server.'); if (document.pointerLockElement) document.exitPointerLock(); } }, 4000);
   ws.onopen = () => {
     opened = true; clearTimeout(to);
-    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo }));
+    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo, map: land }));
     net = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, close: () => ws.close() };
     enterGame();
   };
@@ -676,6 +793,7 @@ function frame() {
     cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0);
     cam.fov = 60; cam.updateProjectionMatrix();
   }
+  updateSnow(dt);
   R.clear(); R.render(scene, cam);
   const W = WEAPONS[cur];
   if (inGame && srv.al && !(W.scope && adsT > 0.9)) { R.clearDepth(); R.render(vmScene, vmCam); }
@@ -746,7 +864,7 @@ function updateHud(dt, t) {
   $('hpB').style.background = srv.hp > 35 ? '#7fd36b' : '#e5533d';
   setText('wName', W.name); setText('ammoN', ammoShown()); setText('resN', '/ ' + srv.r);
   $('rlB').style.width = reloadT > 0 ? (1 - reloadT / reloadDur) * 100 + '%' : '0';
-  setText('net', `ping ${srv.pg} ms`);
+  setText('net', `${MAP.name}\nping ${srv.pg} ms`);
   const gap = 4 + curSpread() / Math.tan(cam.fov * Math.PI / 360) * innerHeight / 2;
   const cr = $('cross');
   cr.style.opacity = srv.al && adsT < 0.4 ? 1 : 0;
