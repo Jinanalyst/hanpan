@@ -3,6 +3,9 @@ import { client, configured, currentUser, signOut, walletOf, shortWallet } from 
 
 const $ = id => document.getElementById(id);
 const status = t => { $('status').textContent = t; };
+// Embedded in another page, login is refused so nothing can be laid over the wallet buttons.
+// This is checked here because some hosts serve static files without the server's x-frame-options header.
+const framed = window.top !== window.self;
 const STATEMENT = 'Sign in to HANPAN. This does not cost anything or move any funds.';
 
 /* ---- wallets found in this browser ---- */
@@ -38,9 +41,11 @@ async function legacyAdapter(w) {
     signMessage: async message => { const r = await w.signMessage(message, 'utf8'); return r.signature || r; },
   };
 }
-addEventListener('wallet-standard:register-wallet', e => e.detail({ register }));
-dispatchEvent(new CustomEvent('wallet-standard:app-ready', { detail: { register } }));
-setTimeout(() => {
+if (!framed) {
+  addEventListener('wallet-standard:register-wallet', e => e.detail({ register }));
+  dispatchEvent(new CustomEvent('wallet-standard:app-ready', { detail: { register } }));
+}
+if (!framed) setTimeout(() => {
   if (!wallets.size && window.solana) wallets.set('Browser wallet', { name: 'Browser wallet', adapter: () => legacyAdapter(window.solana) });
   paint(true);
 }, 600);
@@ -71,7 +76,7 @@ function explain(e) {
 }
 
 async function login(w) {
-  if (busy) return;
+  if (busy || framed) return;
   busy = true; paint();
   status(`Approve the sign-in request in ${w.name}…`);
   try {
@@ -97,6 +102,11 @@ $('logout').onclick = async () => {
   try { await signOut(); showUser(null); status('Logged out.'); } catch (e) { status(explain(e)); }
 };
 
-if (!configured) status('Wallet login is not set up yet. You can still play as a guest.');
+if (framed) {
+  status('Login does not work inside another page. Open it on its own: ');
+  const a = document.createElement('a');
+  a.href = location.pathname; a.target = '_blank'; a.rel = 'noopener'; a.textContent = location.host;
+  $('status').append(a);
+} else if (!configured) status('Wallet login is not set up yet. You can still play as a guest.');
 paint();
-currentUser().then(showUser, e => { showUser(null); status(explain(e)); });
+if (!framed) currentUser().then(showUser, e => { showUser(null); status(explain(e)); });
