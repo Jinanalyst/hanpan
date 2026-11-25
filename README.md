@@ -11,7 +11,7 @@
 | 영역 | 내용 |
 |---|---|
 | 모드 | 팀 데스매치. 15킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
-| 전장 | 도시 6곳(Tokyo Crossing, Seoul Gate, New York Square, Paris Boulevard, London Row, Dubai Marina, 모두 무료), 실제 거리 1곳(Seoul Gangnam, OpenStreetMap 기반), 무료 전장 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
+| 전장 | 도시 6곳(Tokyo Crossing, Seoul Gate, New York Square, Paris Boulevard, London Row, Dubai Marina, 모두 무료), 실제 거리 1곳(Seoul Gangnam, OpenStreetMap 기반), 무료 전장 6곳(Desert Compound, Iron Shore(바다에서 상륙하는 2차 대전풍 전장, 폭격기·헬리콥터 등장, 좌우 비대칭), Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
 | 캐릭터 | `/character.html`에서 3D 병사를 꾸밈: 헤드기어 9종, 얼굴 7종, 군복 8종, 방탄복 5종, 배낭 5종, 장갑, 군화, 벨트 장비, 총 도색 8종. 키트 3개 저장. 외형은 능력치에 영향 없음. 온라인에서 다른 사람에게도 보이고, 팀 색 완장·띠·등 패치는 항상 표시됨 |
 | 장비(G) | 파편 수류탄, 연막탄(봇 시야도 가림), 섬광탄, 화염병, 원격 폭탄, 구급 키트 중 하나. G를 누르고 있으면 궤적이 보이고, 떼면 던짐(우클릭 취소). 원격 폭탄은 G를 다시 누르면 폭발. 서버가 궤적·폭발·회복을 판정 |
 | 무기 | 무료 주무기 4종(카빈, 마크스맨 라이플, 전투소총, 불펍)과 보조무기 3종(권총, 리볼버, 기관권총). 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |

@@ -3,6 +3,7 @@
 import { getMap, randomRoute } from './map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceH, stanceEye, fitStance, leanOff, eyeOf, wallAt, peekRoom, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS, EQUIP, SIDEARMS, isPrimary, isSidearm, isEquip, damageAt } from './weapons.js';
+import { BOMBER, HELI, flightLife, bombRun, bombLands, heliAt, heliFiring } from './air.js';
 import { packGear, unpackGear, randomGear } from './gear.js';
 import { PACKET } from './adpcm.js';
 
@@ -46,6 +47,8 @@ export class Room {
     this.nades = [];    // grenades in the air
     this.smokes = [];   // { x, y, z, until }
     this.fires = [];    // { x, y, z, until, by, team, next }
+    this.airSeq = 1;
+    this.clearAir();
   }
 
   humanCount() { let n = 0; for (const p of this.players.values()) if (!p.bot) n++; return n; }
@@ -87,6 +90,7 @@ export class Room {
     const t = now();
     for (const [w, list] of [['smoke', this.smokes], ['fire', this.fires]]) for (const s of list) if (s.until > t) p.send({ t: 'gx', id: 0, w, p: [s.x, s.y, s.z].map(r2), d: r2(s.until - t) });
     for (const n of this.nades) if (n.stuck) p.send({ t: 'gt', id: n.id, w: n.w, by: n.by, tm: n.team, o: [n.x, n.y, n.z].map(r2), v: [0, 0, 0], st: 1 });
+    for (const s of this.flights) p.send(this.flightMsg(s, t));
     this.balanceBots();
     this.roster();
     return p.id;
@@ -239,17 +243,23 @@ export class Room {
     for (let i = 0; i < (W.pellets || 1); i++) {
       const s = W.pellets ? W.pelletSpread : 0;   // pellets scatter on the server so clients cannot choose the pattern
       const d = dirFrom(yaw + rnd(-s, s), clampN(pitch + rnd(-s, s), -1.5, 1.5));
-      let bt = rayMap(o, d, this.map.boxes, W.range), best = null, head = false;
+      let bt = rayMap(o, d, this.map.boxes, W.range), best = null, head = false, flight = null;
       for (const [q, at] of targets) {
         const h = hitbox(o, d, at);
         if (h.t < bt) { bt = h.t; best = q; head = h.head; }
       }
+      for (const s of this.flights) {                     // enemy helicopters
+        if (s.k !== 'heli' || s.tm === p.team || s.down != null || rt < s.t0) continue;
+        const c = heliAt(s, rt - s.t0), h = rayBox(o, d, [c[0] - 2, c[1] - 1.3, c[2] - 2], [c[0] + 2, c[1] + 1.5, c[2] + 2]);
+        if (h < bt) { bt = h; best = null; flight = s; }
+      }
       for (const n of this.nades) {                       // enemy charges can be shot
         if (!n.stuck || n.team === p.team) continue;
         const h = rayBox(o, d, [n.x - 0.16, n.y - 0.12, n.z - 0.16], [n.x + 0.16, n.y + 0.16, n.z + 0.16]);
-        if (h < bt + 0.2) { bt = h; best = null; this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); break; }
+        if (h < bt + 0.2) { bt = h; best = flight = null; this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); break; }
       }
       ends.push([o[0] + d[0] * bt, o[1] + d[1] * bt, o[2] + d[2] * bt].map(r2));
+      if (flight) this.hitHeli(p, flight, damageAt(W, bt, false), t);
       if (!best) continue;
       const e = tally.get(best) || { dmg: 0, head: false };
       e.dmg += damageAt(W, bt, head); e.head ||= head;
@@ -361,7 +371,7 @@ export class Room {
 
   explode(n, E) {
     const p = this.players.get(n.by), o = [n.x, n.y + 0.15, n.z];
-    if (!p) return;                        // the thrower left
+    if (!p && n.by) return;                // the thrower left; bombs from a plane have none
     for (const q of this.victims(n)) {       // your own bomb can hurt you, not your team
       if (this.phase !== 'play') return;
       let near = Infinity;
@@ -373,6 +383,90 @@ export class Room {
       const k = near <= E.full ? 1 : 1 - (near - E.full) / (E.radius - E.full);
       this.damage(p, q, Math.max(1, Math.round(E.dmg * k)), false, n.w, [n.x, n.z]);
     }
+  }
+
+  /* ---- air: bombers and helicopters, only on lands that have them ---- */
+  // Both sides get the same flights in turn. They only hurt the other team, and their kills give no points.
+  clearAir() {
+    this.flights = [];
+    this.airNext = now() + 9;
+    this.airTurn = Math.random() < 0.5 ? 0 : 1;
+    this.airN = 0;
+  }
+
+  flightMsg(s, t) { return { t: 'air', id: s.id, k: s.k, tm: s.tm, a: r2(t - s.t0), dir: s.dir, z: s.z, b: s.b, down: s.down }; }
+
+  updateAir(t) {
+    if (t >= this.airNext && this.humanCount()) {
+      const tm = (this.airN + this.airTurn) % 2 ? 'blue' : 'red', k = (this.airN >> 1) % 2 ? 'heli' : 'bomb';
+      this.airN++;
+      this.airNext = t + rnd(9, 13);
+      this.launch(k, tm, t);
+    }
+    for (const s of [...this.flights]) {
+      const at = t - s.t0;
+      if (at > flightLife(s)) { this.flights.splice(this.flights.indexOf(s), 1); continue; }
+      if (s.k === 'heli') { if (s.down == null && heliFiring(at)) this.heliGun(s, at, t); continue; }
+      for (; s.hits < s.order.length && at >= bombLands(s.order[s.hits]); s.hits++) {
+        const [x, y, z] = s.order[s.hits];
+        this.broadcast({ t: 'gx', id: 0, w: 'bomb', p: [x, y, z] });
+        this.explode({ w: 'bomb', by: 0, team: s.tm, x, y, z }, BOMBER);
+      }
+    }
+  }
+
+  launch(k, tm, t) {
+    const [hx, hz] = this.map.size, dir = Math.random() < 0.5 ? 1 : -1, s = { id: this.airSeq++, k, tm, t0: t, dir, z: 0 };
+    if (k === 'bomb') {                    // near one of the enemies, never at the spawns
+      const foes = [...this.players.values()].filter(q => q.alive && q.team !== tm), q = foes[Math.random() * foes.length | 0] || { x: 0, z: 0 };
+      const cx = clampN(q.x + rnd(-9, 9), 12 - hx, hx - 12);
+      s.z = r2(clampN(q.z + rnd(-9, 9), 24 - hz, hz - 24));
+      const ground = (x, z) => 60 - rayMap([x, 60, z], [0, -1, 0], this.map.boxes, 60);
+      s.b = bombRun(dir, cx, s.z, ground, () => rnd(-1.5, 1.5)).map(b => b.map(r2));
+      s.order = [...s.b].sort((a, b) => a[4] - b[4]);
+      s.hits = 0;
+    } else {                               // stays over its own half
+      s.z = r2((tm === 'red' ? -1 : 1) * hz * rnd(0.3, 0.45));
+      Object.assign(s, { hp: HELI.hp, left: 0, next: 0, target: 0, aim: null });
+    }
+    this.flights.push(s);
+    this.broadcast(this.flightMsg(s, t));
+  }
+
+  // Short bursts. The rounds start a few metres off and walk onto the target, so there is time to move.
+  heliGun(s, at, t) {
+    if (t < s.next) return;
+    const c = heliAt(s, at), o = [c[0], c[1] - 1.3, c[2]];
+    const seen = q => {
+      const e = [q.x, q.y + 1, q.z], L = Math.hypot(e[0] - o[0], e[1] - o[1], e[2] - o[2]);
+      return q.alive && q.team !== s.tm && q.prot <= 0 && L < HELI.range && this.clear(o, e) && !this.smoked(o, e);
+    };
+    if (!s.left) {
+      const foes = [...this.players.values()].filter(seen), q = foes[Math.random() * foes.length | 0], a = rnd(0, 6.283);
+      s.left = HELI.burst;
+      s.target = q ? q.id : 0;
+      s.aim = q ? [q.x + Math.cos(a) * 5, 0, q.z + Math.sin(a) * 5] : [c[0] + rnd(-14, 14), 0, -s.z * rnd(0, 1.2) + rnd(-6, 6)];
+    }
+    s.left--;
+    s.next = Math.max(s.next + HELI.rate, t - HELI.rate) + (s.left ? 0 : rnd(...HELI.rest));
+    const q = s.target && this.players.get(s.target);
+    if (q && seen(q)) [q.x, q.y + 0.9, q.z].forEach((v, i) => { s.aim[i] += (v - s.aim[i]) * 0.16; });
+    const d = [s.aim[0] + rnd(-1, 1) - o[0], s.aim[1] + rnd(-0.6, 0.6) - o[1], s.aim[2] + rnd(-1, 1) - o[2]], L = Math.hypot(...d);
+    for (let i = 0; i < 3; i++) d[i] /= L;
+    let bt = rayMap(o, d, this.map.boxes, 160), best = null;
+    for (const p of this.players.values()) if (p.alive && p.team !== s.tm) { const h = hitbox(o, d, p); if (h.t < bt) { bt = h.t; best = p; } }
+    this.broadcast({ t: 'ah', id: s.id, e: [o[0] + d[0] * bt, o[1] + d[1] * bt, o[2] + d[2] * bt].map(r2), hit: best ? 1 : 0 });
+    if (best) this.damage(null, best, HELI.dmg, false, 'heligun', [c[0], c[2]]);
+  }
+
+  hitHeli(p, s, dmg, t) {
+    if (s.down != null) return;
+    s.hp -= dmg;
+    const gone = s.hp <= 0;
+    p.send({ t: 'hit', head: 0, kill: gone ? 1 : 0, dmg: Math.round(dmg) });
+    if (!gone) return;
+    s.down = r2(t - s.t0);
+    this.broadcast({ t: 'ad', id: s.id, by: p.id, down: s.down });
   }
 
   // Is the straight line from a to b cut by smoke?
@@ -387,11 +481,11 @@ export class Room {
   }
 
   damage(p, q, dmg, head, w = p.w, from = [p.x, p.z]) {
-    if (q.bot) { q.ai.hurtBy = p.id; q.ai.scan = 0; }
+    if (q.bot && p) { q.ai.hurtBy = p.id; q.ai.scan = 0; }
     if (q.prot > 0) return;
     q.hp -= dmg;
     const kill = q.hp <= 0;
-    if (p !== q) p.send({ t: 'hit', head: head ? 1 : 0, kill: kill ? 1 : 0, dmg });
+    if (p && p !== q) p.send({ t: 'hit', head: head ? 1 : 0, kill: kill ? 1 : 0, dmg });
     q.send({ t: 'dmg', from: from.map(r2), hp: Math.ceil(Math.max(0, q.hp)) });
     if (kill) this.kill(q, p, head, w);
   }
@@ -429,7 +523,7 @@ export class Room {
     if (this.phase !== 'play') return;
     this.phase = 'end';
     this.endT = 10;
-    this.nades = []; this.fires = [];
+    this.nades = []; this.fires = []; this.clearAir();
     const s = this.score;
     this.broadcast({ t: 'end', winner: s.red === s.blue ? 'draw' : s.red > s.blue ? 'red' : 'blue', score: [s.red, s.blue] });
   }
@@ -438,7 +532,7 @@ export class Room {
     this.phase = 'play';
     this.timeLeft = this.matchTime;
     this.score = { red: 0, blue: 0 };
-    this.nades = []; this.smokes = []; this.fires = [];
+    this.nades = []; this.smokes = []; this.fires = []; this.clearAir();
     for (const p of this.players.values()) { p.k = 0; p.d = 0; this.spawn(p); }
     this.broadcast({ t: 'start' });
     this.roster();
@@ -461,6 +555,7 @@ export class Room {
       if (this.endT <= 0) this.resetMatch();
     }
     this.updateNades(dt, t);
+    if (this.map.air && this.phase === 'play') this.updateAir(t);
     for (const p of this.players.values()) {
       if (!p.alive) {
         if (this.phase === 'play' && (p.rsT -= dt) <= 0) this.spawn(p);

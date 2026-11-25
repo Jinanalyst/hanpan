@@ -1,4 +1,5 @@
 // HANPAN lands. Every land is point-symmetric, (x, z) -> (-x, -z), so both teams get the same layout.
+// The only exceptions are the war fronts (fronts.js), where one side attacks and the other defends.
 // Units are meters. Red spawns at negative z, Blue at positive z.
 // To add a land: add an entry to FIELDS here or CITIES in cities.js (half the boxes are enough, the other half is mirrored) and it shows up
 // in the menu, on the server and in the tests.
@@ -7,6 +8,7 @@
 
 import { stairs, stall, pavilion, spawnLine } from './landkit.js';
 import { CITIES } from './cities.js';
+import { FRONTS } from './fronts.js';
 import { REAL } from './realcities.js';
 import { DAY } from './osmgeo.js';
 import { boxGrid, findBox } from './physics.js';
@@ -238,7 +240,8 @@ const FIELDS = {
   },
 };
 
-const DEFS = { ...FIELDS, ...CITIES };
+const { compound, ...REST } = FIELDS;
+const DEFS = { compound, ...FRONTS, ...REST, ...CITIES };
 export const DEFAULT_MAP = 'compound';
 export const MAP_IDS = Object.keys(DEFS);
 export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product, city: Object.hasOwn(CITIES, id) })).concat(REAL.map(({ id, name, desc }) => ({ id, name, desc, city: true, real: true })));
@@ -284,7 +287,7 @@ function build(id, def) {
   const [hx, hz] = def.size;
   const both = list => [...list, ...list.filter(([x, z]) => x || z).map(([x, z, ...rest]) => [-x, -z, ...rest])];
   const raw = [
-    ...both(def.half),
+    ...(def.whole || both(def.half)),
     [0, -hz - 0.5, hx * 2 + 2, 1, 5, 'perimeter'], [0, hz + 0.5, hx * 2 + 2, 1, 5, 'perimeter'],
     [-hx - 0.5, 0, 1, hz * 2, 5, 'perimeter'], [hx + 0.5, 0, 1, hz * 2, 5, 'perimeter'],
   ];
@@ -293,11 +296,11 @@ function build(id, def) {
     max: [x + sx / 2, y0 + h, z + sz / 2],
     kind,
   });
-  const boxes = raw.map(toBox), decor = both(def.decor || []).map(toBox);   // decor: seen, but nothing collides with it
+  const boxes = raw.map(toBox), decor = (def.whole ? def.decor : both(def.decor || [])).map(toBox);   // decor: seen, but nothing collides with it
   const lights = (def.lights || []).flatMap(([x, y, z, c]) => [[x, y, z, c], [-x, y, -z, c]]);
   return {
-    id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes, decor,
-    spawns: { red: def.spawns, blue: def.spawns.map(([x, z]) => [-x, -z]) },
+    id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes: def.whole ? boxGrid(boxes) : boxes, decor, whole: !!def.whole, air: !!def.air, focus: def.focus,
+    spawns: { red: def.spawns, blue: def.blue || def.spawns.map(([x, z]) => [-x, -z]) },
     nav: buildNav(boxes, hx, hz),
   };
 }

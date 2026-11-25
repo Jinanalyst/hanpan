@@ -9,6 +9,7 @@ import { Room, cleanChat, KILL_LIMIT } from '../public/shared/game.js';
 import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
 import { getMap, addCity, isReady, randomMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
 import { REAL } from '../public/shared/realcities.js';
+import { BOMBER, HELI, planeAt, bombAt, bombLands, heliAt, flightLife, fallTime } from '../public/shared/air.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
 import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
 import { hits, hitbox, rayMap, stanceH, fitStance, step, eyeOf, wallAt, lowWall, findWall, peekRoom, PHYS } from '../public/shared/physics.js';
@@ -73,7 +74,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 for (const id of MAP_IDS) {
   const map = getMap(id);
   const near = (a, b) => Math.abs(a - b) < 1e-6;
-  for (const b of map.boxes) {
+  if (!map.whole) for (const b of map.boxes) {
     assert.ok(map.boxes.some(c => c.kind === b.kind && near(c.min[1], b.min[1]) && near(c.max[1], b.max[1]) &&
       near(c.min[0], -b.max[0]) && near(c.max[0], -b.min[0]) && near(c.min[2], -b.max[2]) && near(c.max[2], -b.min[2])), `${id}: both halves match`);
   }
@@ -109,6 +110,59 @@ for (const id of MAP_IDS) {
   assert.ok(kills > 0, `${id}: bots got kills in 2 simulated minutes`);
   assert.ok(slow < legs * 0.15, `${id}: bots are not stuck (${slow} of ${legs})`);
   console.log(`ok  ${id}: ${kills} bot kills in 2 simulated minutes (red ${room.score.red} / blue ${room.score.blue}), stuck ${slow}/${legs}`);
+}
+
+// War front: bombs and helicopters hurt only the other team, give no points, respect cover, and both sides get the same flights
+{
+  const realNow = performance.now.bind(performance);
+  let fake = realNow();
+  performance.now = () => fake;
+  const run = (room, s) => { for (let i = 0; i < s * 30; i++) { fake += 1000 / 30; room.update(1 / 30); } };
+  const make = n => { const room = new Room({ minPlayers: 0, map: 'beach' }), P = []; for (let i = 0; i < n; i++) { const p = { got: [] }; p.s = room.players.get(room.addPlayer('P' + i, 'rifle', m => p.got.push(m))); P.push(p); } room.airNext = Infinity; return { room, P, red: P.filter(p => p.s.team === 'red'), blue: P.filter(p => p.s.team === 'blue') }; };
+  const put = (p, x, z, y = 0) => Object.assign(p.s, { x, y, z, prot: 0, hp: 100 });
+  // what the browser draws ends where the server's bomb lands
+  const run0 = { dir: -1, z: 5 }, b0 = [10, 2, 12, 1, 3];
+  assert.ok(bombAt(run0, b0, bombLands(b0)).every((v, i) => Math.abs(v - b0[i]) < 1e-9));
+  for (const k of ['red', 'blue']) {
+    const { room, P, red, blue } = make(4), me = k === 'red' ? red : blue, foe = k === 'red' ? blue : red;
+    put(foe[0], 0, 0); put(foe[1], 38, 48); put(me[0], 1, 0); put(me[1], -38, -48);
+    room.launch('bomb', k, fake / 1000);
+    const s = room.flights[0];
+    s.order = [[0, 0, 1, 0, 2]]; s.b = s.order;
+    for (const b of s.order) assert.ok(Math.abs(planeAt(s, b[4], b[3])[0]) < 1e6);
+    run(room, 4); assert.equal(foe[0].s.hp, 100, 'still falling');
+    run(room, 0.6);
+    assert.ok(!foe[0].s.alive, 'the bomb kills'); assert.equal(me[0].s.hp, 100, 'own team is safe'); assert.equal(foe[1].s.hp, 100, 'out of range');
+    assert.deepEqual(room.score, { red: 0, blue: 0 }); assert.equal(P[0].got.find(m => m.t === 'k').k, 0); assert.equal(P[0].got.find(m => m.t === 'k').w, 'bomb');
+    run(room, 8); assert.equal(room.flights.length, 0, 'the bombers leave');
+  }
+  { const { room, red, blue } = make(2); put(red[0], -21, -4); put(blue[0], 30, 45);   // under the roof of a bunker
+    room.explode({ w: 'bomb', by: 0, team: 'blue', x: -21, y: 3.1, z: -4 }, BOMBER); assert.equal(red[0].s.hp, 100, 'a roof gives cover'); }
+  { const { room } = make(2);                                   // runs stay off the spawns, whoever they are aimed at
+    for (let i = 0; i < 200; i++) { room.flights = []; room.launch('bomb', i % 2 ? 'red' : 'blue', 0); for (const [x, y, z, , rel] of room.flights[0].b) assert.ok(Math.abs(x) < 42 && Math.abs(z) < 42 && y >= 0 && y < 12 && rel > 0.5, [x, y, z, rel].join()); } }
+  { const { room, red, blue } = make(2); put(blue[0], 0, 13); put(red[0], 0, 44);   // helicopter: finds someone in the open
+    room.launch('heli', 'red', fake / 1000);
+    for (let i = 0; i < 60 && blue[0].s.alive; i++) { run(room, 0.5); if (blue[0].s.alive) put(blue[0], 0, 13); }
+    const shots = blue[0].got.filter(m => m.t === 'ah');
+    assert.ok(shots.length > 40 && shots.some(m => m.hit), 'it fires and hits'); assert.equal(red[0].s.hp, 100); assert.equal(room.flights.length, 0); }
+  { const { room, red, blue } = make(2); put(blue[0], -21, -4); put(red[0], 0, 44);
+    room.launch('heli', 'red', fake / 1000); run(room, 28); assert.equal(blue[0].s.hp, 100, 'a bunker keeps you safe'); }
+  { const { room, red, blue } = make(2); put(red[0], 0, -20); put(blue[0], 30, 45);   // shot down by the other team only
+    room.launch('heli', 'blue', fake / 1000); run(room, 12);
+    const s = room.flights[0], shoot = p => { p.s.alive = true; put(p === red[0] ? blue[0] : red[0], 35, 45); put(p, 0, -20); const c = heliAt(s, fake / 1000 - s.t0), o = eyeOf(p.s), d = [c[0] - o[0], c[1] - o[1], c[2] - o[2]]; p.s.yaw = Math.atan2(-d[0], -d[2]); p.s.next = 0; p.s.mag.rifle = 30; p.s.ping = -0.2; room.fire(p.s, p.s.yaw, Math.atan2(d[1], Math.hypot(d[0], d[2]))); };
+    shoot(blue[0]); assert.equal(s.hp, HELI.hp, 'not by its own team');
+    for (let i = 0; i < 40 && s.down == null; i++) shoot(red[0]);
+    assert.ok(s.down != null && red[0].got.some(m => m.t === 'ad' && m.by === red[0].s.id)); assert.ok(Number.isFinite(s.down) && flightLife(s) < s.down + 3);
+    assert.ok(heliAt(s, s.down + fallTime())[1] < 1.5, 'it comes down'); assert.deepEqual(room.score, { red: 0, blue: 0 });
+    const n = red[0].got.filter(m => m.t === 'ah').length; run(room, 3); assert.equal(red[0].got.filter(m => m.t === 'ah').length, n, 'and stops firing'); assert.equal(room.flights.length, 0); }
+  { const { room, P } = make(2); room.airNext = 0; for (let i = 0; i < 8; i++) { room.airNext = 0; run(room, 0.1); }
+    const got = P[0].got.filter(m => m.t === 'air').map(m => m.tm + m.k);
+    assert.equal(got.length, 8); for (const k of ['redbomb', 'bluebomb', 'redheli', 'blueheli']) assert.equal(got.filter(g => g === k).length, 2, 'same for both: ' + got);
+    const late = []; room.addPlayer('Late', 'rifle', m => late.push(m)); assert.equal(late.filter(m => m.t === 'air').length, room.flights.length, 'late joiners see them');
+    room.endMatch(); assert.equal(room.flights.length, 0); room.resetMatch(); run(room, 1); assert.equal(room.flights.length, 0); }
+  { const room = new Room({ minPlayers: 0 }); room.addPlayer('A', 'rifle', () => {}); run(room, 30); assert.equal(room.flights.length, 0, 'other lands stay quiet'); }
+  performance.now = realNow;
+  console.log('ok  war front: bombs, cover, helicopters, shooting them down, same for both teams');
 }
 
 // 4) Store: paid weapons are fair, locked without ownership, and every product is in the database catalogue
@@ -548,7 +602,7 @@ for (const { id } of REAL) {
   assert.ok(red + blue > 15, id + ': the teams meet'); assert.ok(slow < legs * 0.15, id + ': bots are not stuck');
   console.log(`ok  city ${id}: ${map.boxes.length} boxes, ${red + blue} bot kills in 4 simulated minutes (red ${red} / blue ${blue}), stuck ${slow}/${legs}`);
 }
-assert.ok(MAP_IDS.includes(randomMap()) || REAL.some(c => c.id === randomMap()));
+{ const m = randomMap(); assert.ok(MAP_IDS.includes(m) || REAL.some(c => c.id === m)); };
 function readShopWords() { return JSON.parse(fs.readFileSync(new URL('../tools/osm/shops.json', import.meta.url))).categories; }
 function wallDist(x, z, a, b) { const dx = b[0] - a[0], dz = b[1] - a[1], k = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1))); return Math.hypot(x - a[0] - dx * k, z - a[1] - dz * k); }
 

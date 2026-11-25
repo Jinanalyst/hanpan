@@ -11,6 +11,8 @@ import { bake, box, dispose } from './models.js';
 import { snap, closeStudio } from './studio.js';
 import { cityMat, isCityKind, drawCityBox, cityWall, cityRing, landmark, mergeStatic } from './cityscape.js';
 import { loadCity, buildCity, attribution } from './osmcity.js';
+import { isFrontKind, drawFrontBox, buildFront, createWar, BOMB_REACH } from './front.js';
+import { AIR_NAMES } from './shared/air.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
 import { createBattle, clampVolume } from './battle.js';
@@ -203,6 +205,8 @@ function buildWorld(map) {
     if (b.kind === 'building') continue;   // drawn from the city's own outlines
     const w = b.max[0] - b.min[0], h = b.max[1] - b.min[1], d = b.max[2] - b.min[2];
     if (isCityKind(b.kind) && drawCityBox(g, b, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, night)) continue;
+    if (th.front && b.kind === 'perimeter') continue;   // cliffs, sea and hills take its place
+    if (isFrontKind(b.kind)) { drawFrontBox(g, b, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, T); continue; }
     if (th.ring && b.kind === 'perimeter') { cityWall(g, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, ci++, night); continue; }
     const x = (b.min[0] + b.max[0]) / 2, z = (b.min[2] + b.max[2]) / 2;
     let m;
@@ -226,6 +230,11 @@ function buildWorld(map) {
   if (map.city) {
     mergeStatic(g);
     g.add(buildCity(map.city).group);
+    return g;
+  }
+  if (th.front) {
+    mergeStatic(g);
+    g.add(g.userData.front = buildFront(map));
     return g;
   }
   const gt = groundTex(th.ground); gt.repeat.set(65, 65);
@@ -275,9 +284,9 @@ function updateAir(dt) {
   p.needsUpdate = true;
 }
 // Shadows cover the whole of a small land. On a big one they stay around the camera.
-const SHADOW = { small: [56, 180, -0.0004, 0.03], big: [75, 520, -0.0005, 0.07] };
+const SHADOW = { small: [56, 180, -0.0004, 0.03], front: [66, 180, -0.0004, 0.04], big: [75, 520, -0.0005, 0.07] };
 function fitShadow(big) {
-  const [r, far, bias, nb] = SHADOW[big ? 'big' : 'small'], c = sun.shadow.camera;
+  const [r, far, bias, nb] = SHADOW[big ? 'big' : MAP.theme.front ? 'front' : 'small'], c = sun.shadow.camera;
   if (c.right !== r) { Object.assign(c, { left: -r, right: r, top: r, bottom: -r, far }); c.updateProjectionMatrix(); sun.shadow.bias = bias; sun.shadow.normalBias = nb; }
   if (!big) { sun.target.position.set(0, 0, 0); sun.position.set(...MAP.theme.sun[2]); return; }
   const s = r * 2 / 2048 * 16, x = Math.round(cam.position.x / s) * s, z = Math.round(cam.position.z / s) * s, d = MAP.theme.sun[2];   // whole shadow pixels, so edges do not crawl
@@ -305,6 +314,7 @@ function loadMap(id) {
   hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
   sun.color.set(th.sun[0]); sun.intensity = th.sun[1];
   fitShadow(!!MAP.city);
+  war.load(MAP, T);
   $('osm').replaceChildren(...(MAP.city ? [attribution(MAP.city)] : []));
   vmHemi.intensity = vmSun.intensity = 2.2 * th.vm;
   air.visible = !!th.particles;
@@ -436,6 +446,7 @@ function nadeGone(id) { const q = nades.get(id); if (q) { scene.remove(q.g); dis
 function nadeBurst(m) {
   nadeGone(m.id);
   const p = new THREE.Vector3(...m.p), dx = p.x - me.x, dz = p.z - me.z, dist = Math.hypot(dx, dz), pan = -Math.sin(wrapA(Math.atan2(-dx, -dz) - me.yaw)), v = 1 / (1 + dist * 0.05);
+  if (m.w === 'bomb') { war.blast(m.p); blastLight.position.set(p.x, p.y + 1.5, p.z); blastLight.intensity = 320; return; }
   if (m.w === 'fizz') { puff(p, 0x888888, 0.5, 0.5); noiseSfx(0.2, 2400, 0.2 * v); return; }
   if (m.w === 'fire') { addFire(p, m.d || EQUIP.fire.burns); noiseSfx(0.8, 500, 0.45 * v); noiseSfx(0.15, 4200, 0.25 * v); return; }
   if (m.w === 'flash') {
@@ -534,6 +545,7 @@ function addSmoke(p, life) {
   smokes.push({ g, t: 0, life });
 }
 function clearThrown() {
+  war.clear(); airText('');
   for (const id of [...nades.keys()]) nadeGone(id);
   for (const f of fires.splice(0)) freeGroup(f.g);
   stopAiming(); blindEnd = 0;
@@ -596,6 +608,17 @@ function noiseSfx(d, f, v, at = 0) {
   s.buffer = nbuf; fl.type = 'bandpass'; fl.frequency.value = f; g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + d);
   s.connect(fl).connect(g).connect(master); s.start(t, Math.random() * 0.5); s.stop(t + d);
 }
+
+/* ---------------- war fronts ---------------- */
+const war = createWar({
+  scene, tracer: (a, b) => tracer(a.clone(), b.clone()),
+  audio: () => AC && { AC, master, noise: nbuf },
+  shot: (dist, pan) => shotSfx('battle', dist, pan),
+  boom(dist, pan) { const v = 1 / (1 + dist * 0.04); shotSfx('sniper', dist * 0.35, pan); noiseSfx(1.1, 110, 0.9 * v); noiseSfx(0.7, 320, 0.5 * v, 0.03); },
+  shake(v) { if (inGame) shake = Math.max(shake, v); },
+});
+let airT = 0;
+function airText(s, enemy) { airT = s ? 4.5 : 0; const e = $('airWarn'); e.textContent = s; e.hidden = !s; e.classList.toggle('enemy', !!enemy); }
 
 /* ---------------- game state ---------------- */
 let profile = loadProfile();
@@ -717,6 +740,9 @@ function onMsg(m) {
     case 'gt': battle.thrown(m); nadeThrown(m); if (m.st) nadeStuck({ id: m.id, p: m.o }); break;
     case 'gs': nadeStuck(m); break;
     case 'gx': nadeBurst(m); break;
+    case 'air': { const s = war.flight(m); if (s) { airText(s, m.tm !== myTeam); if (m.tm !== myTeam) blip(620, 0.18, 0.06, 'triangle'); } break; }
+    case 'ah': war.round(m); break;
+    case 'ad': war.down(m); airText((m.by === myId ? 'You' : pname(m.by)) + ' shot down a helicopter', roster.get(m.by)?.tm !== myTeam); break;
     case 'fl': blindMax = Math.max(blindEnd - nowS(), m.s); blindEnd = nowS() + blindMax; blip(3200, Math.min(2.5, m.s), 0.06, 'sine'); stopAiming(); break;
     case 'heal': blip(520, 0.12, 0.08, 'triangle'); blip(700, 0.16, 0.08, 'triangle', 0.12); break;
     case 'pi': send({ t: 'po', s: m.s }); break;
@@ -873,7 +899,7 @@ function tryFire() {
     for (const [id, q] of others) { if (!q.s.alive || q.team === myTeam) continue; const h = hitbox(o, d, q.s); if (h.t < tt) { tt = h.t; victim = true; aimedAt = id; aimedT = t; } }
     const end = new THREE.Vector3(o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt);
     if (W.slot === 1 || Math.random() < 0.5) tracer(from, end);
-    if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range) impact(end, n);
+    if (victim) puff(end, 0x7a1f14, 0.3, 0.35); else if (tt < W.range && !(MAP.theme.front && end.z < 0.1 - MAP.size[1])) impact(end, n);   // nothing to hit out at sea
   }
 }
 function remoteShot(m) {
@@ -909,7 +935,7 @@ function onKill(m) {
   const row = document.createElement('div');
   if (m.k === myId || m.v === myId) row.className = 'me';
   const a = document.createElement('span'); a.className = kp?.tm === 'red' ? 'r' : 'b'; a.textContent = kp ? kp.n : '';
-  const w = document.createElement('em'); w.textContent = (WEAPONS[m.w]?.name || EQUIP[m.w]?.name || '') + (m.hs ? ' · headshot' : '');
+  const w = document.createElement('em'); w.textContent = (WEAPONS[m.w]?.name || EQUIP[m.w]?.name || AIR_NAMES[m.w] || '') + (m.hs ? ' · headshot' : '');
   const b = document.createElement('span'); b.className = vp_?.tm === 'red' ? 'r' : 'b'; b.textContent = vp_ ? vp_.n : '';
   row.append(a, w, b);
   const feed = $('feed'); feed.prepend(row); while (feed.children.length > 6) feed.lastChild.remove();
@@ -958,6 +984,10 @@ function drawMini() {
   mg.fillStyle = 'rgba(216,201,163,.55)';
   for (const b of BOXES) if (b.min[1] < 2 && b.min[0] < me.x + 33 && b.max[0] > me.x - 33 && b.min[2] < me.z + 33 && b.max[2] > me.z - 33) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
   const t = nowS();
+  mg.lineWidth = 0.4; mg.strokeStyle = '#ff5a3c'; mg.fillStyle = 'rgba(255,90,60,.22)';
+  for (const [x, z] of war.bombs()) { mg.beginPath(); mg.arc(x, z, 4, 0, 7); mg.fill(); mg.stroke(); }
+  mg.lineWidth = 0.7;
+  for (const [x, z, tm] of war.helis()) { mg.strokeStyle = tm === myTeam ? '#7fd3ff' : '#ff5a3c'; mg.beginPath(); mg.moveTo(x - 1.6, z - 1.6); mg.lineTo(x + 1.6, z + 1.6); mg.moveTo(x + 1.6, z - 1.6); mg.lineTo(x - 1.6, z + 1.6); mg.stroke(); }
   for (const [, o] of others) {
     if (!o.s.alive) continue;
     const mate = o.team === myTeam;
@@ -1373,6 +1403,7 @@ function frame() {
   battle.update({ play: inGame && phase === 'play' && !held && snaps.length > 1, paused: !$('pauseOv').hidden, talk: voice.talking || voice.speakers().some(allowedSpeaker), cam, myId, myTeam, others });
   if (warming && !warming.drawable) return;   // the last picture stays until the new land can be drawn without stopping
   updateAir(dt);
+  war.update(dt, { cam, yaw: inGame ? me.yaw : cam.rotation.y, team: myTeam, world });
   if (MAP.city) fitShadow(true);
   R.clear(); R.render(scene, cam);
   const W = WEAPONS[cur];
@@ -1466,6 +1497,8 @@ function updateHud(dt, t) {
   let danger = false;
   for (const f of fires) if (Math.hypot(f.g.position.x - me.x, f.g.position.z - me.z) < EQUIP.fire.radius + 0.5) danger = true;
   for (const q of nades.values()) if ((q.w === 'frag' || (q.w === 'charge' && q.by !== myId)) && (q.tm !== myTeam || q.by === myId) && Math.hypot(q.n.x - me.x, q.n.z - me.z) < EQUIP.frag.radius) danger = true;
+  for (const [x, z, left] of war.bombs()) if (left < 2.6 && Math.hypot(x - me.x, z - me.z) < BOMB_REACH + 1) danger = true;
+  if (airT > 0 && (airT -= dt) <= 0) airText('');
   if (danger && srv.al && $('nadeWarn').hidden) battle.danger();
   $('nadeWarn').hidden = !danger || !srv.al;
   setText('net', `${MAP.name}\nping ${srv.pg} ms`);
@@ -1479,7 +1512,7 @@ function updateHud(dt, t) {
   vignT = Math.max(0, vignT - dt); $('vign').style.opacity = Math.max(vignT, srv.al && srv.hp < 35 ? 0.35 : 0);
   $('scope').style.display = W.scope && adsT > 0.9 && srv.al ? 'block' : 'none';
   if (!srv.al && phase === 'play') {
-    setText('center', `${killer === myId ? 'Caught by your own bomb' : 'Eliminated by ' + pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
+    setText('center', `${killer === myId ? 'Caught by your own bomb' : !killer ? 'Killed from the air' : 'Eliminated by ' + pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
   } else if (srv.al && srv.pr && phase === 'play') setText('center', 'Spawn protection');
   else if (phase === 'play') setText('center', '');
 }

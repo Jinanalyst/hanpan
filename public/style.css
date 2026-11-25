@@ -78,6 +78,7 @@ select{display:block;width:100%;min-height:44px;margin-top:4px;font:600 16px Raj
 #aimHint{position:absolute;left:50%;bottom:18%;transform:translateX(-50%);font-size:16px;text-shadow:0 1px 4px #000;white-space:nowrap}
 #blind{position:absolute;inset:0;background:#fff;opacity:0}@media(prefers-reduced-motion:reduce){#blind{background:#55584c}}
 #nadeWarn{position:absolute;left:50%;bottom:24%;transform:translateX(-50%);font:400 24px 'Black Ops One',sans-serif;color:#ff8a72;background:rgba(20,24,14,.8);border:2px solid var(--red);padding:4px 18px;border-radius:3px}#nadeWarn[hidden]{display:none}
+#airWarn{position:absolute;left:50%;top:13%;transform:translateX(-50%);font:700 20px Rajdhani,sans-serif;white-space:nowrap;color:#cfe8ff;background:rgba(20,24,14,.7);border-left:4px solid #5aa5ff;padding:4px 16px;border-radius:3px}#airWarn.enemy{color:#ffd9cf;border-left-color:var(--red)}#airWarn[hidden]{display:none}
 button{min-height:44px;font:700 16px Rajdhani,sans-serif;border-radius:3px;border:1px solid #5b6240;background:#262a1b;color:var(--ink);cursor:pointer;padding:0 14px}
 .landHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0 6px}.landHead .lbl{margin:0}.landHead button{min-height:34px;font-size:15px}.lands [hidden]{display:none}
 .lands{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
