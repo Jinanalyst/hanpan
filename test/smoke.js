@@ -63,6 +63,8 @@ for (const id of MAP_IDS) {
     assert.ok(map.boxes.some(c => c.kind === b.kind && near(c.min[1], b.min[1]) && near(c.max[1], b.max[1]) &&
       near(c.min[0], -b.max[0]) && near(c.max[0], -b.min[0]) && near(c.min[2], -b.max[2]) && near(c.max[2], -b.min[2])), `${id}: both halves match`);
   }
+  if (map.theme.ring) for (const b of map.boxes) assert.ok(b.min[1] > 3 || b.min[0] >= -map.size[0] - 1 && b.max[0] <= map.size[0] + 1 && b.min[2] >= -map.size[1] - 1 && b.max[2] <= map.size[1] + 1, `${id}: nothing sticks out of the land`);
+  for (const b of [...map.boxes, ...map.decor]) assert.ok([...b.min, ...b.max].every(Number.isFinite) && [0, 1, 2].every(i => b.max[i] > b.min[i]), `${id}: every box has a size`);
   const { points, main } = map.nav;
   assert.ok(main.length > points.length * 0.9, `${id}: floor is connected`);
   for (const [x, z] of [...map.spawns.red, ...map.spawns.blue]) {
@@ -291,7 +293,7 @@ for (const id of MAP_IDS) {
     assert.ok(ro.ps.some(p => p.n === 'One') && ro.ps.some(p => p.n === 'Two'));
     const status = await (await fetch(`http://localhost:${port}/status`)).json();
     assert.equal(status.rooms[0].humans, 2);
-    for (const f of ['character.html', 'character.js', 'shared/gear.js', 'soldier.js', 'models.js', 'arsenal.js', 'studio.js', 'profile.js']) assert.equal((await fetch(`http://localhost:${port}/${f}`)).status, 200, f);
+    for (const f of ['character.html', 'character.js', 'shared/gear.js', 'soldier.js', 'cityscape.js', 'shared/cities.js', 'shared/landkit.js', 'models.js', 'arsenal.js', 'studio.js', 'profile.js']) assert.equal((await fetch(`http://localhost:${port}/${f}`)).status, 200, f);
     const html = await (await fetch(`http://localhost:${port}/`)).text();
     assert.ok(html.includes('client.js'), 'client page served');
     // land choice: own room per land, 'any' joins the busiest room, bad or missing values get the default land

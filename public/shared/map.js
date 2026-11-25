@@ -1,32 +1,14 @@
 // HANPAN lands. Every land is point-symmetric, (x, z) -> (-x, -z), so both teams get the same layout.
 // Units are meters. Red spawns at negative z, Blue at positive z.
-// To add a land: add an entry to DEFS (half the boxes are enough, the other half is mirrored) and it shows up
+// To add a land: add an entry to FIELDS here or CITIES in cities.js (half the boxes are enough, the other half is mirrored) and it shows up
 // in the menu, on the server and in the tests.
 
 // Box: [centerX, centerZ, sizeX, sizeZ, height, kind, baseY = 0]
 
-// Walkable steps leading down from a platform edge at (x, z) in direction (dx, dz). H is the climb above baseY.
-function stairs(x, z, dx, dz, width, H, kind, baseY = 0) {
-  const n = Math.ceil(H / 0.42), rise = H / n, depth = 0.8, out = [];
-  for (let i = 1; i < n; i++) {
-    const d = (n - i - 0.5) * depth;
-    out.push([x + dx * d, z + dz * d, dx ? depth : width, dz ? depth : width, rise * i, kind, baseY]);
-  }
-  return out;
-}
-// Market stall: counter, four posts and a cloth roof.
-function stall(x, z) {
-  const posts = [[-1.5, -0.8], [1.5, -0.8], [-1.5, 0.8], [1.5, 0.8]];
-  return [[x, z, 2.6, 0.9, 1.1, 'wood'], [x, z, 3.5, 2.1, 0.15, 'cloth', 2.9], ...posts.map(([a, b]) => [x + a, z + b, 0.14, 0.14, 2.9, 'wood'])];
-}
-// Four posts and a flat roof, standing on a floor at height y.
-function pavilion(x, z, w, d, y, h, post, roof) {
-  const p = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([a, b]) => [x + a * (w / 2 - 0.5), z + b * (d / 2 - 0.5), 0.6, 0.6, h, post, y]);
-  return [...p, [x, z, w + 1.4, d + 1.4, 0.4, roof, y + h], [x, z, w * 0.6, d * 0.6, 0.6, roof, y + h + 0.4]];
-}
-const spawnLine = (z, xs) => xs.map(x => [x, z]);
+import { stairs, stall, pavilion, spawnLine } from './landkit.js';
+import { CITIES } from './cities.js';
 
-const DEFS = {
+const FIELDS = {
   compound: {
     name: 'Desert Compound', desc: 'Open sand around a walled ruin', size: [40, 40],
     spawns: [[-10, -36], [-4, -36], [4, -36], [10, -36], [-16, -35], [16, -35], [0, -35]],
@@ -253,9 +235,10 @@ const DEFS = {
   },
 };
 
+const DEFS = { ...FIELDS, ...CITIES };
 export const DEFAULT_MAP = 'compound';
 export const MAP_IDS = Object.keys(DEFS);
-export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product }));
+export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product, city: Object.hasOwn(CITIES, id) }));
 export const isMap = id => typeof id === 'string' && Object.hasOwn(DEFS, id);
 // Is this land free, or owned? owned is a Set of store product ids.
 export const canPlay = (id, owned) => isMap(id) && (!DEFS[id].product || !!owned?.has(DEFS[id].product));
@@ -273,20 +256,21 @@ export function getMap(id) {
 
 function build(id, def) {
   const [hx, hz] = def.size;
-  const mirrored = def.half.filter(([x, z]) => x || z).map(([x, z, ...rest]) => [-x, -z, ...rest]);
+  const both = list => [...list, ...list.filter(([x, z]) => x || z).map(([x, z, ...rest]) => [-x, -z, ...rest])];
   const raw = [
-    ...def.half, ...mirrored,
+    ...both(def.half),
     [0, -hz - 0.5, hx * 2 + 2, 1, 5, 'perimeter'], [0, hz + 0.5, hx * 2 + 2, 1, 5, 'perimeter'],
     [-hx - 0.5, 0, 1, hz * 2, 5, 'perimeter'], [hx + 0.5, 0, 1, hz * 2, 5, 'perimeter'],
   ];
-  const boxes = raw.map(([x, z, sx, sz, h, kind, y0 = 0]) => ({
+  const toBox = ([x, z, sx, sz, h, kind, y0 = 0]) => ({
     min: [x - sx / 2, y0, z - sz / 2],
     max: [x + sx / 2, y0 + h, z + sz / 2],
     kind,
-  }));
+  });
+  const boxes = raw.map(toBox), decor = both(def.decor || []).map(toBox);   // decor: seen, but nothing collides with it
   const lights = (def.lights || []).flatMap(([x, y, z, c]) => [[x, y, z, c], [-x, y, -z, c]]);
   return {
-    id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes,
+    id, name: def.name, desc: def.desc, product: def.product, size: def.size, theme: def.theme, lights, boxes, decor,
     spawns: { red: def.spawns, blue: def.spawns.map(([x, z]) => [-x, -z]) },
     nav: buildNav(boxes, hx, hz),
   };

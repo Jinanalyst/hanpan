@@ -9,6 +9,7 @@ import { makeSoldier, setWeapon, disposeSoldier, outfit } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
 import { bake, box, dispose } from './models.js';
 import { snap, closeStudio } from './studio.js';
+import { cityMat, isCityKind, drawCityBox, cityWall, cityRing, landmark, mergeStatic } from './cityscape.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
 import { Room, cleanName } from './shared/game.js';
@@ -182,12 +183,18 @@ function boxGeo(w, h, d, s) {
   return g;
 }
 const TEXM = { container: 3, sandbag: 2, barrier: 4, snow: 4, rock: 4, stone: 4, cloth: 1.5 };   // meters per texture repeat
+const GLOW = /^(neon|screen|lava)/;
+const FIT = new Set(['vend', 'phone', 'screenA', 'screenB']);   // one picture per face
+function fitUV(g) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, i % 4 % 2, i % 4 < 2 ? 1 : 0); }
 function buildWorld(map) {
   const g = new THREE.Group(), th = map.theme;
+  const night = !!th.night;
   const wall = std({ map: T.concrete, color: th.wall }), perim = std({ map: T.concrete, color: th.perimeter });
   let ci = 0;
-  for (const b of map.boxes) {
+  for (const b of [...map.boxes, ...map.decor]) {
     const w = b.max[0] - b.min[0], h = b.max[1] - b.min[1], d = b.max[2] - b.min[2];
+    if (isCityKind(b.kind) && drawCityBox(g, b, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, night)) continue;
+    if (th.ring && b.kind === 'perimeter') { cityWall(g, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, ci++, night); continue; }
     const x = (b.min[0] + b.max[0]) / 2, z = (b.min[2] + b.max[2]) / 2;
     let m;
     if (b.kind === 'barrel') m = new THREE.Mesh(new THREE.CylinderGeometry(w / 2, w / 2, h, 18), MAT.barrel);
@@ -198,18 +205,25 @@ function buildWorld(map) {
         l.scale.y = 0.6; l.position.set(x, y, z); l.castShadow = true; g.add(l);
       }
     } else {
-      const mat = b.kind === 'container' ? CONT[ci++ % 3] : b.kind === 'wall' ? wall : b.kind === 'perimeter' ? perim : MAT[b.kind] || wall;
-      m = new THREE.Mesh(boxGeo(w, h, d, b.kind === 'crate' ? Math.max(w, h, d) : TEXM[b.kind] || 3), mat);
+      const mat = b.kind === 'container' ? CONT[ci++ % 3] : b.kind === 'wall' ? wall : b.kind === 'perimeter' ? perim : MAT[b.kind] || cityMat(b.kind) || wall;
+      m = new THREE.Mesh(boxGeo(w, h, d, b.kind === 'crate' || FIT.has(b.kind) ? Math.max(w, h, d) : TEXM[b.kind] || 3), mat);
+      if (FIT.has(b.kind)) fitUV(m.geometry);
     }
     m.position.set(x, (b.min[1] + b.max[1]) / 2, z);
-    m.castShadow = m.receiveShadow = !b.kind.startsWith('neon') && b.kind !== 'lava';
+    const flat = h < 0.08;
+    m.castShadow = !GLOW.test(b.kind) && !flat; m.receiveShadow = !GLOW.test(b.kind);
     g.add(m);
   }
   const gt = groundTex(th.ground); gt.repeat.set(65, 65);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), std({ map: gt }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; g.add(ground);
+  if (th.ring) {
+    cityRing(g, map.size, th.ring, night);
+    const [kind, x, z] = th.landmark, L = landmark(kind, night);
+    L.position.set(x, 0, z); g.add(L);
+  }
   const [shape, farC] = th.far, far = std({ map: T.concrete, color: farC }), lit = [MAT.neonM, MAT.neonC, MAT.neonY];
-  for (let i = 0; i < 34; i++) { // distant structures for depth
+  for (let i = 0; i < (shape === 'city' ? 0 : 34); i++) { // distant structures for depth
     const a = i / 34 * Math.PI * 2 + rnd(-0.05, 0.05), r = rnd(78, 140), w = rnd(8, 22), h = shape === 'tower' ? rnd(14, 42) : rnd(5, 18);
     const m = shape === 'peak' ? new THREE.Mesh(new THREE.ConeGeometry(w * 1.1, h * 1.6, 7), far) : new THREE.Mesh(boxGeo(w, h, rnd(8, 20), 4), far);
     m.position.set(Math.cos(a) * r, shape === 'peak' ? h * 0.8 : h / 2, Math.sin(a) * r); m.rotation.y = rnd(0, 3); g.add(m);
@@ -223,6 +237,7 @@ function buildWorld(map) {
     for (let i = 0; i < 900; i++) { const a = rnd(0, 6.283), y = rnd(0.05, 1), r = Math.sqrt(1 - y * y); p.push(Math.cos(a) * r * 450, y * 450, Math.sin(a) * r * 450); }
     g.add(new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(p, 3)), new THREE.PointsMaterial({ color: 0xdfe8ff, size: 2, sizeAttenuation: false, fog: false })));
   }
+  mergeStatic(g);
   for (const [x, y, z, c] of map.lights) { const l = new THREE.PointLight(c, 45, 18, 1.8); l.position.set(x, y, z); g.add(l); }
   return g;
 }
@@ -848,15 +863,20 @@ paintPortrait();
 addEventListener('pageshow', e => { if (e.persisted) { profile = loadProfile(); $('nameIn').value = loadName(); paintLo(); paintPortrait(); } });
 let land = store.get('hanpan-land', DEFAULT_MAP);
 if (land !== 'any' && !isMap(land)) land = DEFAULT_MAP;
-for (const { id, name, desc, product } of [...MAP_LIST, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
+const LANDS = [...MAP_LIST].sort((a, b) => b.city - a.city);
+for (const { id, name, desc, product, city } of [...LANDS, { id: 'any', name: 'Any land', desc: 'Join the busiest match' }]) {
   const b = document.createElement('button'), n = document.createElement('b'), d = document.createElement('small');
-  b.type = 'button'; b.dataset.land = id; n.textContent = name; d.textContent = desc;
+  b.type = 'button'; b.dataset.land = id; b.dataset.group = id === 'any' ? 'all' : city ? 'city' : 'field'; n.textContent = name; d.textContent = desc;
   if (id === 'any') { const q = document.createElement('span'); q.className = 'any'; q.textContent = '?'; q.ariaHidden = 'true'; b.append(q); } else b.append(floorPlan(getMap(id)));
   if (product) { const l = document.createElement('i'); l.className = 'lock'; b.append(l); b.dataset.product = product; }
   b.append(n, d); $('landSeg').append(b);
 }
+let landTab = land !== 'any' && !MAP_LIST.find(m => m.id === land).city ? 'field' : 'city';
+$('landTabs').onclick = e => { const b = e.target.closest('button'); if (b) { landTab = b.dataset.tab; paintLand(); } };
 function paintLand() {
+  for (const b of $('landTabs').children) b.setAttribute('aria-pressed', b.dataset.tab === landTab);
   for (const b of $('landSeg').children) {
+    b.hidden = b.dataset.group !== 'all' && b.dataset.group !== landTab;
     b.setAttribute('aria-pressed', b.dataset.land === land);
     const l = b.querySelector('.lock'), no = locked(b.dataset.product);
     b.classList.toggle('locked', no);
@@ -978,7 +998,8 @@ function frame() {
     drawMini();
   } else {
     menuA += dt * 0.05;
-    cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0);
+    if (MAP.theme.ring) { cam.position.set(Math.sin(menuA) * 12, 14, Math.cos(menuA) * 12); cam.lookAt(-Math.sin(menuA) * 40, 6, -Math.cos(menuA) * 40); }   // cities are walled in by buildings
+    else { cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0); }
     cam.fov = 60; cam.updateProjectionMatrix();
   }
   updateAir(dt);

@@ -11,7 +11,7 @@
 | 영역 | 내용 |
 |---|---|
 | 모드 | 팀 데스매치. 50킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
-| 전장 | 무료 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
+| 전장 | 도시 6곳(Tokyo Crossing, Seoul Gate, New York Square, Paris Boulevard, London Row, Dubai Marina, 모두 무료), 무료 전장 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
 | 캐릭터 | `/character.html`에서 3D 병사를 꾸밈: 헤드기어 9종, 얼굴 7종, 군복 8종, 방탄복 5종, 배낭 5종, 장갑, 군화, 벨트 장비, 총 도색 8종. 키트 3개 저장. 외형은 능력치에 영향 없음. 온라인에서 다른 사람에게도 보이고, 팀 색 완장·띠·등 패치는 항상 표시됨 |
 | 장비(G) | 파편 수류탄, 연막탄(봇 시야도 가림), 구급 키트 중 하나. 서버가 궤적·폭발·회복을 판정 |
 | 무기 | 무료 주무기 4종(카빈, 마크스맨 라이플, 전투소총, 불펍)과 보조무기 3종(권총, 리볼버, 기관권총). 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
@@ -136,12 +136,15 @@ public/vendor/           supabase-js (고정 버전)
 public/client.js         렌더링(Three.js), 입력, 예측·보간, HUD, 사운드
 public/shared/game.js    매치 규칙, 판정, 봇 AI (서버와 연습 모드가 같이 씀)
 public/shared/physics.js 이동·충돌·레이캐스트 (서버와 클라이언트가 같이 씀)
-public/shared/map.js     전장 8곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
+public/shared/cities.js  도시 6곳의 배치와 테마
+public/shared/landkit.js 전장 부품(계단, 자동차, 노점, 횡단보도 등)
+public/cityscape.js      도시 그래픽(건물 외벽, 상점, 차량, 스카이라인, 랜드마크)
+public/shared/map.js     일반 전장 8곳(점대칭이라 양 팀이 공평), 스폰, 테마 색, 봇 길찾기
 public/shared/weapons.js 무기와 장비 수치
 test/smoke.js            스모크 테스트
 ```
 
-밸런스 조정은 `weapons.js`, 전장 수정은 `map.js`의 `DEFS`에서 해당 전장의 `half` 배열만 고치면 됩니다. 자동으로 반대편에 대칭 복사됩니다. `DEFS`에 항목을 추가하면 메뉴, 서버, 테스트에 새 전장이 자동으로 나타납니다.
+밸런스 조정은 `weapons.js`, 전장 수정은 `map.js`의 `FIELDS`(도시는 `cities.js`의 `CITIES`)에서 해당 전장의 `half` 배열만 고치면 됩니다. 자동으로 반대편에 대칭 복사됩니다. 두 곳 중 한 곳에 항목을 추가하면 메뉴, 서버, 테스트에 새 전장이 자동으로 나타납니다.
 
 ## 프로토콜 (JSON over WebSocket `/ws`)
 
