@@ -34,7 +34,7 @@ const server = http.createServer((req, res) => {
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     const headers = { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' };
-    if (path.basename(file) === 'login.html') headers['x-frame-options'] = 'DENY';   // no hidden overlays on the wallet login
+    if (['login.html', 'servers.html'].includes(path.basename(file))) headers['x-frame-options'] = 'DENY';   // no hidden overlays on the wallet login or chat
     res.writeHead(200, headers);
     res.end(data);
   });

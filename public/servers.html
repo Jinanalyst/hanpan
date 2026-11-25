@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Servers · HANPAN 한판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="chatPage">
+<header class="storeTop">
+  <a href="./" class="brand">HANPAN</a>
+  <nav><a href="./">Play</a> <a href="store.html">Store</a> <span id="who"></span></nav>
+</header>
+<p id="status" role="status"></p>
+
+<main id="gate" class="gate" hidden>
+  <h1>Servers</h1>
+  <p>Make your own chat server and add friends by their wallet address.</p>
+  <a class="btn primary" href="login.html?next=servers">Log in with wallet</a>
+</main>
+
+<main id="app" class="chat" hidden>
+  <nav class="side" aria-label="Your servers">
+    <button id="newBtn" type="button" class="primary">New server</button>
+    <section id="invBox" hidden><h2>Invitations</h2><ul id="invList"></ul></section>
+    <h2>Your servers</h2>
+    <ul id="serverList"></ul>
+    <p id="noServers" class="small" hidden>None yet. Make one, or ask a friend to add your wallet address.</p>
+    <div class="mine"><span class="small">Your wallet address</span><code id="myWallet"></code><button id="copyBtn" type="button">Copy address</button></div>
+  </nav>
+
+  <section id="room" class="room" aria-label="Chat" hidden>
+    <header class="roomTop">
+      <button id="backBtn" type="button" class="narrow">Servers</button>
+      <div class="title"><h1 id="roomName"></h1><p id="roomAbout"></p></div>
+      <button id="peopleBtn" type="button" class="narrow" aria-expanded="false" aria-controls="people">People</button>
+      <button id="editBtn" type="button">Edit</button>
+      <button id="leaveBtn" type="button">Leave</button>
+    </header>
+    <div id="log" class="log" role="log" aria-label="Messages" tabindex="0"><button id="olderBtn" type="button" hidden>Show earlier messages</button><p id="empty" class="small" hidden>No messages yet. Say hello.</p><ol id="msgs"></ol></div>
+    <form id="sendForm" class="send"><input id="msgIn" type="text" maxlength="500" autocomplete="off" aria-label="Message"><button class="primary">Send</button></form>
+  </section>
+  <section id="pick" class="room none"><p>Pick a server to open its chat.</p></section>
+
+  <aside id="people" class="people" aria-label="People" hidden>
+    <form id="addForm" hidden>
+      <label for="walletIn">Add a friend by wallet address</label>
+      <input id="walletIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="60" placeholder="Solana address">
+      <button class="primary">Add</button>
+      <p id="addNote" role="status" class="small">They see the invitation here after logging in with that wallet, and choose whether to join.</p>
+    </form>
+    <h2>People <span id="count"></span></h2>
+    <ul id="memberList"></ul>
+    <section id="sentBox" hidden><h2>Invited</h2><ul id="sentList"></ul></section>
+    <form id="nickForm"><label for="nickIn">Your name in this server</label><div class="row"><input id="nickIn" type="text" maxlength="16" autocomplete="off"><button>Save</button></div></form>
+  </aside>
+</main>
+
+<dialog id="editDlg" class="dlg" aria-labelledby="editTitle">
+  <form id="editForm" method="dialog">
+    <h2 id="editTitle">New server</h2>
+    <label for="nameIn2">Name</label>
+    <input id="nameIn2" type="text" minlength="2" maxlength="32" required autocomplete="off">
+    <label for="aboutIn">What it is for (optional)</label>
+    <input id="aboutIn" type="text" maxlength="120" autocomplete="off">
+    <span class="lbl" id="colLbl">Colour</span>
+    <div id="colors" class="colors" role="radiogroup" aria-labelledby="colLbl"></div>
+    <p id="editErr" class="err" role="alert"></p>
+    <div class="go"><button class="primary" id="editOk">Create</button><button type="button" id="editNo">Cancel</button></div>
+    <button type="button" id="delBtn" class="danger" hidden>Delete this server</button>
+  </form>
+</dialog>
+<dialog id="askDlg" class="dlg" aria-labelledby="askText"><p id="askText"></p><div class="go"><button type="button" id="askYes" class="primary"></button><button type="button" id="askNo">Cancel</button></div></dialog>
+
+<script type="module" src="servers.js"></script>
+</body>
+</html>

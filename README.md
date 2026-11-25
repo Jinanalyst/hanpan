@@ -99,6 +99,14 @@ location / {
 - 상품은 NOWPayments 서명과 결제 조회를 모두 통과하고 상태가 `finished`일 때만 지급됩니다.
 - 상품을 추가할 때는 `weapons.js` 또는 `map.js`에 `product`를 넣고, 같은 id를 `products` 테이블에도 추가하세요.
 
+## 채팅 서버
+
+플레이어가 직접 서버를 만들고(`/servers.html`) 친구를 **솔라나 지갑 주소**로 초대해 채팅합니다. 초대받은 사람은 그 지갑으로 로그인하면 초대가 보이고, 수락해야 들어옵니다. 아직 한 번도 로그인하지 않은 지갑도 초대할 수 있습니다.
+
+- 설정: `supabase/migrations/20261125063707_chat_servers.sql`을 Hanpan 프로젝트에 적용합니다. 다른 비밀 키는 필요 없습니다.
+- 메시지는 데이터베이스의 행 규칙(RLS)으로 멤버만 읽을 수 있고, 모든 변경은 `chat_*` 함수가 확인합니다. 지갑 주소는 검증된 로그인 정보에서 가져오므로 속일 수 없습니다.
+- 한도: 1인당 서버 5개 소유·30개 참여, 서버당 50명(초대 포함), 메시지 500자·10초에 6개. 초대를 거절하면 같은 사람이 7일 동안 다시 초대할 수 없습니다.
+
 ## 구조
 
 ```
@@ -106,6 +114,7 @@ server/index.js          HTTP 정적 파일 + WebSocket, 방 배정, 30Hz 틱
 public/index.html        클라이언트 페이지
 public/login.html/.js    솔라나 지갑 로그인 페이지
 public/store.html/.js    상점 페이지
+public/servers.html/.js  채팅 서버 페이지 (지갑 주소로 친구 초대)
 public/voice.js          팀 음성(녹음·재생), voice-worklet.js는 마이크 처리
 public/shared/adpcm.js   음성 압축 (말하는 사람당 약 8KB/s)
 public/floorplan.js      전장 미니 평면도

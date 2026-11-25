@@ -865,7 +865,9 @@ function paintAccount(user) {
   if (!configured) return;
   const shop = document.createElement('a');
   shop.href = 'store.html'; shop.textContent = 'Store'; shop.className = 'shop';
-  box.append(shop);
+  const chat = document.createElement('a');
+  chat.href = 'servers.html'; chat.textContent = 'Servers'; chat.className = 'shop';
+  box.append(shop, chat);
   const a = document.createElement('a');
   a.href = 'login.html';
   if (user) { const w = walletOf(user); a.textContent = shortWallet(w); a.title = 'Signed in as ' + w; } else a.textContent = 'Log in with wallet';
