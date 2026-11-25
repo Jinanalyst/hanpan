@@ -1,0 +1,18 @@
+{
+  "maxNames": 240,
+  "categories": [
+    { "id": "cafe", "kinds": ["cafe", "coffee", "tea", "ice_cream", "internet_cafe"], "words": ["Brew", "Bean", "Crema", "Mocha", "Drip", "Latte", "Roast", "Foam"], "tails": ["#", "Room", "Lab", "Yard"] },
+    { "id": "food", "kinds": ["restaurant", "food_court", "deli", "seafood"], "words": ["Table", "Ember", "Noodle", "Grill", "Spoon", "Rice", "Broth", "Pepper", "Ginger", "Kettle", "Wok", "Basil", "Skillet", "Clay Pot"], "tails": ["#", "House", "Kitchen", "Corner", "& Co"] },
+    { "id": "fast", "kinds": ["fast_food"], "words": ["Bun", "Crisp", "Patty", "Wrap", "Fry"], "tails": ["#", "Stop", "Box", "Express"] },
+    { "id": "bar", "kinds": ["bar", "pub", "nightclub", "biergarten", "karaoke_box", "alcohol", "wine"], "words": ["Hop", "Barrel", "Velvet", "Tonic", "Neon", "Cellar"], "tails": ["#", "Bar", "Lounge", "Taproom"] },
+    { "id": "bakery", "kinds": ["bakery", "pastry", "confectionery", "chocolate", "cheese", "butcher", "greengrocer"], "words": ["Crust", "Butter", "Wheat", "Oven", "Sugar"], "tails": ["#", "Bakery", "Loaf", "Pantry"] },
+    { "id": "beauty", "kinds": ["hairdresser", "beauty", "nail_salon", "cosmetics", "massage", "perfumery", "tattoo", "hairdresser_supply"], "words": ["Glow", "Curl", "Petal", "Satin", "Mirror", "Bloom", "Silk", "Halo", "Comb", "Blush"], "tails": ["#", "Salon", "Studio", "Atelier"] },
+    { "id": "mart", "kinds": ["convenience", "supermarket", "grocery", "variety_store", "kiosk", "newsagent", "tobacco", "general", "lottery"], "words": ["Hurry", "Daily", "Corner", "Night", "Sun"], "tails": ["# Mart", "Stop", "24", "Pick"] },
+    { "id": "bank", "kinds": ["bank", "bureau_de_change", "money_transfer", "post_office", "insurance"], "words": ["Copperleaf", "Pebblestone", "Lanternhill", "Tidewell"], "tails": ["Trust", "Bank #", "Capital"] },
+    { "id": "clinic", "kinds": ["clinic", "dentist", "doctors", "pharmacy", "chemist", "hospital", "veterinary", "optician", "medical_supply", "hearing_aids"], "words": ["Clear", "Mint", "Sage", "Alba", "Pine"], "tails": ["Clinic #", "Dental", "Care", "Pharmacy"] },
+    { "id": "fashion", "kinds": ["clothes", "shoes", "bag", "jewelry", "watches", "boutique", "fashion_accessories", "department_store", "mall", "leather", "tailor"], "words": ["Thread", "Loom", "Denim", "Aster", "Ivory", "Seam"], "tails": ["#", "Wear", "& Thread", "Closet"] },
+    { "id": "stage", "kinds": ["cinema", "theatre", "arts_centre", "casino", "gambling", "events_venue", "music_venue"], "words": ["Lantern", "Curtain", "Orbit"], "tails": ["Hall", "Screen #", "Stage"] },
+    { "id": "goods", "kinds": [], "words": ["Paper", "Pixel", "Tin", "Cobalt", "Kite", "Maple", "Orchid", "Gear"], "tails": ["#", "Goods", "Supply", "Works"] }
+  ],
+  "skip": ["school", "kindergarten", "college", "university", "research_institute", "library", "police", "fire_station", "townhall", "courthouse", "embassy", "community_centre", "social_facility", "car_repair", "fuel", "language_school", "prep_school", "music_school", "driving_school", "studio", "conference_centre", "marketplace", "car_wash", "car_rental"]
+}

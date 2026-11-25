@@ -1,6 +1,6 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
-import { getMap, isMap, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
+import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { packGear, unpackGear } from './shared/gear.js';
@@ -10,6 +10,7 @@ import { buildGun, buildEquip } from './arsenal.js';
 import { bake, box, dispose } from './models.js';
 import { snap, closeStudio } from './studio.js';
 import { cityMat, isCityKind, drawCityBox, cityWall, cityRing, landmark, mergeStatic } from './cityscape.js';
+import { loadCity, buildCity, attribution } from './osmcity.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
 import { Room, cleanName } from './shared/game.js';
@@ -63,7 +64,7 @@ Object.assign(sun.shadow.camera, { left: -56, right: 56, top: 56, bottom: -56, n
 sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
-scene.add(sun);
+scene.add(sun, sun.target);
 const flashLight = new THREE.PointLight(0xffc070, 0, 8, 2);
 scene.add(flashLight);
 const vmHemi = new THREE.HemisphereLight(0xffffff, 0x554433, 2.2), vmSun = new THREE.DirectionalLight(0xfff0d8, 2.2);
@@ -149,6 +150,11 @@ const T = {
   redwood: ctex(128, 128, (g, w, h) => { g.fillStyle = '#9c2f26'; g.fillRect(0, 0, w, h); speck(g, w, h, 700, ['#8c2820', '#ab3a30'], 3); g.fillStyle = '#2f7d6b'; g.fillRect(0, 0, w, 14); }),
   plaster: ctex(128, 128, (g, w, h) => { g.fillStyle = '#e6dcc8'; g.fillRect(0, 0, w, h); speck(g, w, h, 700, ['#dbd0ba', '#efe7d6'], 3); g.fillStyle = '#8d8778'; g.fillRect(0, h * 0.8, w, h * 0.2); }),
   hedge: ctex(128, 128, (g, w, h) => { g.fillStyle = '#4b6d38'; g.fillRect(0, 0, w, h); speck(g, w, h, 1800, ['#3d5c2d', '#5c8245', '#6d9450'], 5); }),
+  hoard: ctex(256, 128, (g, w, h) => {
+    for (let x = 0; x < w; x += 64) { g.fillStyle = x % 128 ? '#e3e5e2' : '#d6d9d6'; g.fillRect(x, 0, 63, h); }
+    g.fillStyle = '#2f7d4f'; g.fillRect(0, 0, w, 22); g.fillStyle = '#e0a52a'; g.fillRect(0, h - 16, w, 16);
+    speck(g, w, h, 500, ['#c4c8c4', '#f1f3f1'], 2);
+  }),
   cloth: ctex(128, 128, (g, w, h) => { for (let x = 0; x < w; x += 32) { g.fillStyle = x % 64 ? '#e8dcc2' : '#b23a2e'; g.fillRect(x, 0, 32, h); } }),
 };
 const groundTex = ([base, ...specks]) => ctex(512, 512, (g, w, h) => {
@@ -172,7 +178,7 @@ const MAT = {
   hull: std({ map: T.hull, roughness: 0.6, metalness: 0.2 }), basalt: std({ map: T.basalt }), lava: new THREE.MeshBasicMaterial({ map: T.lava }), tile: std({ map: T.tile, roughness: 0.7 }),
   redwood: std({ map: T.redwood, roughness: 0.7 }), plaster: std({ map: T.plaster }), hedge: std({ map: T.hedge }), blossom: std({ map: T.wood }), petal: std({ color: 0xf2a5c0 }),
   neonM: new THREE.MeshBasicMaterial({ color: 0xff5fb4 }), neonC: new THREE.MeshBasicMaterial({ color: 0x5fe3ff }), neonY: new THREE.MeshBasicMaterial({ color: 0xffd75a }),
-  sandbag: std({ map: T.sandbag }), barrier: std({ map: T.barrier }), barrel: std({ color: 0x46603d, roughness: 0.55, metalness: 0.35 }),
+  sandbag: std({ map: T.sandbag }), barrier: std({ map: T.barrier }), hoard: std({ map: T.hoard, roughness: 0.7 }), barrel: std({ color: 0x46603d, roughness: 0.55, metalness: 0.35 }),
 };
 const CONT = ['#8c3b2a', '#2f5d7c', '#4c6b3a'].map(c => std({ map: containerTex(c), roughness: 0.7, metalness: 0.2 }));
 
@@ -182,7 +188,7 @@ function boxGeo(w, h, d, s) {
   for (let f = 0; f < 6; f++) for (let i = 0; i < 4; i++) { const k = f * 4 + i; uv.setXY(k, uv.getX(k) * dims[f][0] / s, uv.getY(k) * dims[f][1] / s); }
   return g;
 }
-const TEXM = { container: 3, sandbag: 2, barrier: 4, snow: 4, rock: 4, stone: 4, cloth: 1.5 };   // meters per texture repeat
+const TEXM = { hoard: 4, container: 3, sandbag: 2, barrier: 4, snow: 4, rock: 4, stone: 4, cloth: 1.5 };   // meters per texture repeat
 const GLOW = /^(neon|screen|lava)/;
 const FIT = new Set(['vend', 'phone', 'screenA', 'screenB']);   // one picture per face
 function fitUV(g) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, i % 4 % 2, i % 4 < 2 ? 1 : 0); }
@@ -192,6 +198,7 @@ function buildWorld(map) {
   const wall = std({ map: T.concrete, color: th.wall }), perim = std({ map: T.concrete, color: th.perimeter });
   let ci = 0;
   for (const b of [...map.boxes, ...map.decor]) {
+    if (b.kind === 'building') continue;   // drawn from the city's own outlines
     const w = b.max[0] - b.min[0], h = b.max[1] - b.min[1], d = b.max[2] - b.min[2];
     if (isCityKind(b.kind) && drawCityBox(g, b, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, night)) continue;
     if (th.ring && b.kind === 'perimeter') { cityWall(g, w, h, d, (b.min[0] + b.max[0]) / 2, (b.min[2] + b.max[2]) / 2, ci++, night); continue; }
@@ -213,6 +220,11 @@ function buildWorld(map) {
     const flat = h < 0.08;
     m.castShadow = !GLOW.test(b.kind) && !flat; m.receiveShadow = !GLOW.test(b.kind);
     g.add(m);
+  }
+  if (map.city) {
+    mergeStatic(g);
+    g.add(buildCity(map.city).group);
+    return g;
   }
   const gt = groundTex(th.ground); gt.repeat.set(65, 65);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), std({ map: gt }));
@@ -260,10 +272,26 @@ function updateAir(dt) {
   }
   p.needsUpdate = true;
 }
+// Shadows cover the whole of a small land. On a big one they stay around the camera.
+const SHADOW = { small: [56, 180, -0.0004, 0.03], big: [75, 520, -0.0005, 0.07] };
+function fitShadow(big) {
+  const [r, far, bias, nb] = SHADOW[big ? 'big' : 'small'], c = sun.shadow.camera;
+  if (c.right !== r) { Object.assign(c, { left: -r, right: r, top: r, bottom: -r, far }); c.updateProjectionMatrix(); sun.shadow.bias = bias; sun.shadow.normalBias = nb; }
+  if (!big) { sun.target.position.set(0, 0, 0); sun.position.set(...MAP.theme.sun[2]); return; }
+  const s = r * 2 / 2048 * 16, x = Math.round(cam.position.x / s) * s, z = Math.round(cam.position.z / s) * s, d = MAP.theme.sun[2];   // whole shadow pixels, so edges do not crawl
+  sun.target.position.set(x, 0, z); sun.position.set(x + d[0] * 2, d[1] * 2, z + d[2] * 2);
+}
+// Real cities come in a file of their own, loaded the first time one is chosen.
+const loading = {};
+function ensureMap(id) {
+  if (!isReal(id) || isReady(id)) return Promise.resolve();
+  return (loading[id] ||= loadCity(id).then(addCity).finally(() => { delete loading[id]; }));
+}
 const worlds = {};
 let world = null;
 function loadMap(id) {
   const next = getMap(id);
+  if (!isReady(next.id)) return;   // only a plan so far
   if (world && next === MAP) return;
   MAP = next; BOXES = MAP.boxes;
   if (world) world.visible = false;
@@ -273,11 +301,14 @@ function loadMap(id) {
   paintSky(th.skyTop, th.skyHor);
   scene.fog.color.set(th.fog[0]); scene.fog.near = th.fog[1]; scene.fog.far = th.fog[2];
   hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
-  sun.color.set(th.sun[0]); sun.intensity = th.sun[1]; sun.position.set(...th.sun[2]);
+  sun.color.set(th.sun[0]); sun.intensity = th.sun[1];
+  fitShadow(!!MAP.city);
+  $('osm').replaceChildren(...(MAP.city ? [attribution(MAP.city)] : []));
   vmHemi.intensity = vmSun.intensity = 2.2 * th.vm;
   air.visible = !!th.particles;
   if (th.particles) { air.material.color.set(th.particles.color); air.material.size = th.particles.size; }
-  for (const m of [...tracers, ...decals, ...puffs]) m.visible = false;
+  for (const m of [...tracers, ...puffs]) m.visible = false;
+  decals.count = decalI = 0;
 }
 
 /* ---------------- soldiers ---------------- */
@@ -335,10 +366,9 @@ function tracer(a, b) {
   m.position.copy(a).lerp(b, 0.5); m.lookAt(b); m.scale.set(1, 1, len); m.visible = true; m.userData.t = 0.07; m.material.opacity = 0.55;
 }
 const decalTex = ctex(64, 64, (g) => { const gr = g.createRadialGradient(32, 32, 0, 32, 32, 30); gr.addColorStop(0, 'rgba(15,12,10,1)'); gr.addColorStop(0.35, 'rgba(30,25,20,.85)'); gr.addColorStop(1, 'rgba(40,35,30,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); });
-const decals = [...Array(80)].map(() => {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.14), new THREE.MeshBasicMaterial({ map: decalTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
-  m.visible = false; scene.add(m); return m;
-});
+const decals = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.14, 0.14), new THREE.MeshBasicMaterial({ map: decalTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }), 80);   // one draw call for all holes
+decals.count = 0; decals.frustumCulled = false; scene.add(decals);
+const hole = new THREE.Object3D();
 let decalI = 0;
 const puffTex = ctex(64, 64, (g) => { const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); });
 const puffs = [...Array(40)].map(() => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false })); s.visible = false; s.userData = { t: 0, m: 1 }; scene.add(s); return s; });
@@ -350,9 +380,10 @@ function puff(p, color, size = 0.5, life = 0.5) {
 function impact(p, n, color = 0xb9a68a) {
   puff(p, color, 0.35, 0.45);
   if (!n || (!n[0] && !n[1] && !n[2])) return;
-  const d = decals[decalI++ % decals.length];
-  d.position.set(p.x + n[0] * 0.01, p.y + n[1] * 0.01, p.z + n[2] * 0.01);
-  d.lookAt(p.x + n[0], p.y + n[1], p.z + n[2]); d.rotation.z = Math.random() * 6; d.visible = true;
+  hole.position.set(p.x + n[0] * 0.01, p.y + n[1] * 0.01, p.z + n[2] * 0.01);
+  hole.lookAt(p.x + n[0], p.y + n[1], p.z + n[2]); hole.rotation.z = Math.random() * 6; hole.updateMatrix();
+  decals.setMatrixAt(decalI % 80, hole.matrix); decals.instanceMatrix.needsUpdate = true;
+  decals.count = Math.min(80, ++decalI);
 }
 function updateFx(dt) {
   for (const m of tracers) if (m.visible) { m.userData.t -= dt; m.material.opacity = Math.max(0, m.userData.t / 0.07) * 0.55; if (m.userData.t <= 0) m.visible = false; }
@@ -404,28 +435,36 @@ function nadeBurst(m) {
 const blastLight = new THREE.PointLight(0xffa050, 0, 16, 2); scene.add(blastLight);
 let shake = 0;
 const fires = [];    // { g, t, life }
+const FLAME = [0xff7a1f, 0xffb038, 0xff4a14].map(c => new THREE.Color(c)), flameC = new THREE.Color();
 function addFire(p, life) {
-  const g = new THREE.Group();
-  for (let i = 0; i < 44; i++) {
-    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: [0xff7a1f, 0xffb038, 0xff4a14][i % 3], blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+  const g = new THREE.Group();   // the flames are one draw call; added light, so a darker colour is a fainter flame
+  const flames = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: puffTex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }), 44);
+  flames.frustumCulled = false;
+  flames.userData.list = Array.from({ length: 44 }, (_, i) => {
     const a = Math.random() * 6.283, R = Math.sqrt(Math.random()) * EQUIP.fire.radius * 0.9;
-    m.userData = { x: Math.cos(a) * R, z: Math.sin(a) * R, s: rnd(0.9, 1.8), o: Math.random() };
-    g.add(m);
-  }
+    return { x: Math.cos(a) * R, z: Math.sin(a) * R, s: rnd(0.9, 1.8), o: Math.random(), c: FLAME[i % 3] };
+  });
+  g.add(flames);
   const burnt = new THREE.Mesh(new THREE.CircleGeometry(EQUIP.fire.radius, 28), new THREE.MeshBasicMaterial({ color: 0x1a120c, transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
   burnt.rotation.x = -Math.PI / 2; burnt.position.y = 0.05; burnt.userData.ground = true; g.add(burnt);
   g.position.set(p.x, p.y, p.z); scene.add(g);
   fires.push({ g, t: 0, life, crackle: 0 });
 }
-function freeGroup(g) { scene.remove(g); for (const m of g.children) { m.material.dispose(); if (m.isMesh) m.geometry.dispose(); } }
+function freeGroup(g) { scene.remove(g); for (const m of g.children) { m.material.dispose(); if (m.isInstancedMesh) m.dispose(); if (m.isMesh) m.geometry.dispose(); } }
 function updateFires(dt) {
   for (let i = fires.length - 1; i >= 0; i--) {
     const f = fires[i]; f.t += dt;
     const grow = Math.min(1, f.t / 0.4) * Math.min(1, Math.max(0, (f.life - f.t) / 0.8));
     for (const m of f.g.children) {
       if (m.userData.ground) { m.material.opacity = 0.55 * Math.min(1, f.t * 2, Math.max(0, f.life - f.t + 1)); continue; }
-      const u = m.userData, k = (f.t * 1.3 + u.o) % 1;
-      m.position.set(u.x, 0.15 + k * 1.1, u.z); m.scale.setScalar(u.s * (1.2 - k * 0.8) * (0.3 + 0.7 * grow)); m.material.opacity = (1 - k) * 0.85 * grow;
+      hole.quaternion.copy(cam.quaternion);
+      m.userData.list.forEach((u, q) => {
+        const k = (f.t * 1.3 + u.o) % 1;
+        hole.position.set(u.x, 0.15 + k * 1.1, u.z); hole.scale.setScalar(u.s * (1.2 - k * 0.8) * (0.3 + 0.7 * grow)); hole.updateMatrix();
+        m.setMatrixAt(q, hole.matrix); m.setColorAt(q, flameC.copy(u.c).multiplyScalar((1 - k) * 0.85 * grow));
+      });
+      hole.scale.setScalar(1);
+      m.instanceMatrix.needsUpdate = m.instanceColor.needsUpdate = true;
     }
     const d = Math.hypot(f.g.position.x - me.x, f.g.position.z - me.z);
     if ((f.crackle -= dt) <= 0) { f.crackle = rnd(0.08, 0.25); noiseSfx(0.05, rnd(900, 2600), 0.1 / (1 + d * 0.15)); }
@@ -610,7 +649,16 @@ function paintMutes() {
   }));
 }
 
+let held = null;   // messages that wait until the land is loaded
 function onMsg(m) {
+  if (held) { held.push(m); return; }
+  if (m.t === 'welcome' && !isReady(m.map) && isReal(m.map)) {
+    const mine = net, queue = held = [];
+    setText('center', 'Loading the city…');
+    ensureMap(m.map).then(() => { if (held !== queue) return; held = null; setText('center', ''); if (net === mine) for (const q of [m, ...queue]) if (net === mine && q.t !== 'pi') onMsg(q); },
+      () => { if (held !== queue) return; held = null; if (net === mine) leaveGame('Could not load this land. Try again.'); });
+    return;
+  }
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
     case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { stance = me.cr = 0; slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; } break;
@@ -842,7 +890,7 @@ function drawMini() {
   mg.save(); mg.beginPath(); mg.arc(c, c, c - 2, 0, 7); mg.clip();
   mg.translate(c, c); mg.rotate(me.yaw); mg.scale(sc, sc); mg.translate(-me.x, -me.z);
   mg.fillStyle = 'rgba(216,201,163,.55)';
-  for (const b of BOXES) if (b.min[1] < 2) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
+  for (const b of BOXES) if (b.min[1] < 2 && b.min[0] < me.x + 33 && b.max[0] > me.x - 33 && b.min[2] < me.z + 33 && b.max[2] > me.z - 33) mg.fillRect(b.min[0], b.min[2], b.max[0] - b.min[0], b.max[2] - b.min[2]);
   const t = nowS();
   for (const [, o] of others) {
     if (!o.s.alive) continue;
@@ -986,6 +1034,11 @@ for (const { id, name, desc, product, city } of [...LANDS, { id: 'any', name: 'A
 }
 let landTab = land !== 'any' && !MAP_LIST.find(m => m.id === land).city ? 'field' : 'city';
 $('landTabs').onclick = e => { const b = e.target.closest('button'); if (b) { landTab = b.dataset.tab; paintLand(); } };
+function showLand(id) {
+  if (isReady(id)) { loadMap(id); return; }
+  status('Loading the city…');
+  ensureMap(id).then(() => { if (land === id && !inGame) { status(''); loadMap(id); } }, () => { if (land === id && !inGame) status('Could not load this land. Check your connection and choose it again.'); });
+}
 function paintLand() {
   for (const b of $('landTabs').children) b.setAttribute('aria-pressed', b.dataset.tab === landTab);
   for (const b of $('landSeg').children) {
@@ -995,12 +1048,12 @@ function paintLand() {
     b.classList.toggle('locked', no);
     if (l) l.textContent = no ? 'Locked' : 'Owned';
   }
-  if (land !== 'any' && !inGame) loadMap(land);   // show the chosen land behind the menu
+  if (land !== 'any' && !inGame) showLand(land);   // show the chosen land behind the menu
 }
 $('landSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; land = b.dataset.land; store.set('hanpan-land', land); paintLand(); };
-loadMap(land);
-paintLand();
 const status = t => { $('status').textContent = t; };
+loadMap(isReady(land) ? land : DEFAULT_MAP);
+paintLand();
 // wallet login (optional; guests can always play)
 function paintAccount(user) {
   const box = $('account');
@@ -1036,15 +1089,18 @@ function enterGame() {
   dropSoldiers(); clearThrown(); paintLo(); hudCache.kitNote = null; setText('kitNote', '');
 }
 function leaveGame(msg = '') {
-  voice.close(); closeChat();
+  voice.close(); closeChat(); held = null;
   if (net) { const n = net; net = null; n.close(); }
   inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
   dropSoldiers(); clearThrown(); paintLo();
 }
-$('practice').onclick = () => {
+$('practice').onclick = async () => {
+  if (connecting) return;
   audio(); lock();
-  const room = new Room({ id: 'practice', minPlayers: 8, map: land === 'any' ? randomMap(owned) : land });
+  const pick = land === 'any' ? randomMap(owned) : land;
+  if (!await prepare(pick)) return;
+  const room = new Room({ id: 'practice', minPlayers: 8, map: pick });
   let live = true;
   const id = room.addPlayer(playerName(), kit().lo, m => queueMicrotask(() => live && onMsg(m)), 'all', null, { sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear) });   // practice: try everything
   const timer = setInterval(() => room.update(1 / 30), 1000 / 30);
@@ -1062,10 +1118,19 @@ function needsStore() {
   return true;
 }
 let connecting = false;
+// Loads a land before a match. False when it did not work, or something else started meanwhile.
+async function prepare(id) {
+  if (id === 'any' || isReady(id)) return true;
+  connecting = true; status('Loading the city…');
+  try { await ensureMap(id); status(''); return !inGame; }
+  catch { status('Could not load this land. Check your connection and try again.'); if (document.pointerLockElement) document.exitPointerLock(); return false; }
+  finally { connecting = false; }
+}
 $('online').onclick = async () => {
   if (connecting || needsStore()) return;
   audio(); lock(); voice.ready();
   if (!/^https?:$/.test(location.protocol)) { status('Open this page from the game server to play online.'); return; }
+  if (!await prepare(land)) return;
   status('Connecting…');
   connecting = true;
   const token = await accessToken().catch(() => null);
@@ -1111,11 +1176,12 @@ function frame() {
     drawMini();
   } else {
     menuA += dt * 0.05;
-    if (MAP.theme.ring) { cam.position.set(Math.sin(menuA) * 12, 14, Math.cos(menuA) * 12); cam.lookAt(-Math.sin(menuA) * 40, 6, -Math.cos(menuA) * 40); }   // cities are walled in by buildings
+    if (MAP.theme.ring || MAP.city) { cam.position.set(Math.sin(menuA) * 12, 14, Math.cos(menuA) * 12); cam.lookAt(-Math.sin(menuA) * 40, 6, -Math.cos(menuA) * 40); }   // cities are walled in by buildings
     else { cam.position.set(Math.sin(menuA) * 46, 18, Math.cos(menuA) * 46); cam.lookAt(0, 0, 0); }
     cam.fov = 60; cam.updateProjectionMatrix();
   }
   updateAir(dt);
+  if (MAP.city) fitShadow(true);
   R.clear(); R.render(scene, cam);
   const W = WEAPONS[cur];
   if (inGame && srv.al && !(W.scope && adsT > 0.9)) { R.clearDepth(); R.render(vmScene, vmCam); }

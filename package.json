@@ -6,6 +6,7 @@
   "description": "Browser team deathmatch FPS with an authoritative Node server and bots",
   "scripts": {
     "start": "node app.cjs",
+    "maps": "node tools/osm/build.mjs",
     "test": "node test/smoke.js"
   },
   "engines": {

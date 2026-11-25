@@ -7,6 +7,9 @@
 
 import { stairs, stall, pavilion, spawnLine } from './landkit.js';
 import { CITIES } from './cities.js';
+import { REAL } from './realcities.js';
+import { DAY } from './osmgeo.js';
+import { boxGrid, findBox } from './physics.js';
 
 const FIELDS = {
   compound: {
@@ -238,20 +241,43 @@ const FIELDS = {
 const DEFS = { ...FIELDS, ...CITIES };
 export const DEFAULT_MAP = 'compound';
 export const MAP_IDS = Object.keys(DEFS);
-export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product, city: Object.hasOwn(CITIES, id) }));
-export const isMap = id => typeof id === 'string' && Object.hasOwn(DEFS, id);
+export const MAP_LIST = MAP_IDS.map(id => ({ id, name: DEFS[id].name, desc: DEFS[id].desc, product: DEFS[id].product, city: Object.hasOwn(CITIES, id) })).concat(REAL.map(({ id, name, desc }) => ({ id, name, desc, city: true, real: true })));
+// Lands made from real city blocks (tools/osm). Their data is a file of its own: load it, then call addCity with it.
+export const isReal = id => REAL.some(c => c.id === id);
+export const isMap = id => typeof id === 'string' && (Object.hasOwn(DEFS, id) || isReal(id));
+export const isReady = id => isMap(id) && (!isReal(id) || !!built[id]);
 // Is this land free, or owned? owned is a Set of store product ids.
-export const canPlay = (id, owned) => isMap(id) && (!DEFS[id].product || !!owned?.has(DEFS[id].product));
+export const canPlay = (id, owned) => isMap(id) && (!DEFS[id]?.product || !!owned?.has(DEFS[id].product));
 export function randomMap(owned) {
-  const ids = MAP_IDS.filter(id => canPlay(id, owned));
+  const ids = [...MAP_IDS, ...REAL.map(c => c.id).filter(isReady)].filter(id => canPlay(id, owned));
   return ids[Math.floor(Math.random() * ids.length)];
 }
 
 const built = {};
-// Returns the built land. Unknown ids fall back to the default one.
+// Returns the built land. Unknown ids fall back to the default one. A real city that is not loaded yet only has a plan to show.
 export function getMap(id) {
   if (!isMap(id)) id = DEFAULT_MAP;
+  if (!isReady(id)) return planOf(REAL.find(c => c.id === id));
   return built[id] || (built[id] = build(id, DEFS[id]));
+}
+
+const REAL_THEME = {
+  skyTop: 0x6f9fd0, skyHor: DAY.sky, fog: [DAY.sky, 120, 620], hemi: DAY.hemi, sun: DAY.sun,
+  ground: ['#a9a69c', '#9c998f', '#b4b1a7', '#8f8c83', '#bfbcb2'], perimeter: 0xd6d1c6, wall: 0xffffff, far: ['city', 0], vm: 1,
+};
+const planOf = c => ({ id: c.id, name: c.name, desc: c.desc, size: [c.half, c.half], theme: REAL_THEME, boxes: c.plan.map(([a, b, d, e]) => ({ min: [a, 0, b], max: [d, 9, e], kind: 'building' })), decor: [], lights: [], spawns: { red: [], blue: [] } });
+// Registers the data of a real city and returns its land.
+export function addCity(data) {
+  const { half, solids, props, spawns } = data.arena;
+  const boxes = boxGrid([
+    ...solids.map(([x0, z0, x1, z1, h, y]) => ({ min: [x0, y, z0], max: [x1, h, z1], kind: 'building' })),
+    ...props.map(([x, z, sx, sz, h, kind, y = 0]) => ({ min: [x - sx / 2, y, z - sz / 2], max: [x + sx / 2, y + h, z + sz / 2], kind })),
+  ]);
+  let nav = null;
+  return (built[data.id] = {
+    id: data.id, name: data.name, desc: data.desc, size: [half, half], theme: REAL_THEME, boxes, decor: [], lights: [], spawns, city: data, focus: half * 0.5,
+    get nav() { return nav || (nav = buildNav(boxes, half, half)); },   // only where bots run
+  });
 }
 
 function build(id, def) {
@@ -278,7 +304,7 @@ function build(id, def) {
 
 /* ---- bot navigation: a grid of open floor cells linked where a bot can walk straight between them ---- */
 const CELL = 3;
-const solid = (boxes, x, z, r) => boxes.some(b => b.min[1] < 1.75 && b.max[1] > 0.5 &&
+const solid = (boxes, x, z, r) => !!findBox(boxes, x, z, r, b => b.min[1] < 1.75 && b.max[1] > 0.5 &&
   x + r > b.min[0] && x - r < b.max[0] && z + r > b.min[2] && z - r < b.max[2]);
 
 function clearWalk(boxes, x0, z0, x1, z1) {
@@ -287,7 +313,7 @@ function clearWalk(boxes, x0, z0, x1, z1) {
   return true;
 }
 
-function buildNav(boxes, hx, hz) {
+export function buildNav(boxes, hx, hz) {
   const pts = [], at = new Map();
   const nx = Math.floor((hx - 1.5) / CELL), nz = Math.floor((hz - 1.5) / CELL);
   for (let i = -nx; i <= nx; i++) for (let j = -nz; j <= nz; j++) {
@@ -318,9 +344,12 @@ function buildNav(boxes, hx, hz) {
 // Route from (x, z) to a random reachable point, as a list of [x, z] to walk through.
 export function randomRoute(map, x, z) {
   const { points, links, main } = map.nav;
-  const near = [...main].sort((a, b) => Math.hypot(points[a][0] - x, points[a][1] - z) - Math.hypot(points[b][0] - x, points[b][1] - z)).slice(0, 8);
+  const far = k => Math.hypot(points[k][0] - x, points[k][1] - z), around = main.filter(k => far(k) < 9);
+  const near = (around.length ? around : [...main]).sort((a, b) => far(a) - far(b)).slice(0, 8);
   const start = near.find(k => clearWalk(map.boxes, x, z, points[k][0], points[k][1])) ?? near[0];
-  const goal = main[Math.floor(Math.random() * main.length)];
+  // on a big land most walks end near the middle, so the teams meet
+  const middle = map.focus && Math.random() < 0.65 ? main.filter(k => Math.hypot(...points[k]) < map.focus) : main;
+  const goal = middle[Math.floor(Math.random() * middle.length)];
   const prev = new Map([[start, -1]]), queue = [start];
   for (let q = 0; q < queue.length && !prev.has(goal); q++) {
     const ks = links[queue[q]], o = Math.floor(Math.random() * ks.length);   // random order varies the routes

@@ -29,6 +29,28 @@ export function fitStance(p, want, boxes) {
   return 2;
 }
 
+// Big lands sort their boxes into square cells, so only the near ones are tested. Without a grid every box is.
+const GRID = 4;
+export function boxGrid(boxes) {
+  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+  for (const b of boxes) { x0 = Math.min(x0, b.min[0]); z0 = Math.min(z0, b.min[2]); x1 = Math.max(x1, b.max[0]); z1 = Math.max(z1, b.max[2]); }
+  x0 = Math.floor(x0 / GRID) - 1; z0 = Math.floor(z0 / GRID) - 1;
+  const nx = Math.ceil(x1 / GRID) + 1 - x0, nz = Math.ceil(z1 / GRID) + 1 - z0, cells = Array.from({ length: nx * nz }, () => []);
+  for (const b of boxes) {
+    for (let i = Math.floor(b.min[0] / GRID) - x0; i <= Math.floor(b.max[0] / GRID) - x0; i++) for (let j = Math.floor(b.min[2] / GRID) - z0; j <= Math.floor(b.max[2] / GRID) - z0; j++) cells[i * nz + j].push(b);
+  }
+  Object.defineProperty(boxes, 'grid', { value: { x0, z0, nx, nz, cells }, configurable: true });
+  return boxes;
+}
+// The first box near (x, z), within r, for which test is true.
+export function findBox(boxes, x, z, r, test) {
+  const g = boxes.grid;
+  if (!g) { for (const b of boxes) if (test(b)) return b; return null; }
+  const i1 = Math.min(g.nx - 1, Math.floor((x + r) / GRID) - g.x0), j1 = Math.min(g.nz - 1, Math.floor((z + r) / GRID) - g.z0);
+  for (let i = Math.max(0, Math.floor((x - r) / GRID) - g.x0); i <= i1; i++) for (let j = Math.max(0, Math.floor((z - r) / GRID) - g.z0); j <= j1; j++) for (const b of g.cells[i * g.nz + j]) if (test(b)) return b;
+  return null;
+}
+
 function overlaps(x, y, z, h, b) {
   return x + PHYS.r > b.min[0] && x - PHYS.r < b.max[0] &&
          z + PHYS.r > b.min[2] && z - PHYS.r < b.max[2] &&
@@ -36,8 +58,7 @@ function overlaps(x, y, z, h, b) {
 }
 
 export function hits(x, y, z, h, boxes) {
-  for (const b of boxes) if (overlaps(x, y, z, h, b)) return b;
-  return null;
+  return findBox(boxes, x, z, PHYS.r, b => overlaps(x, y, z, h, b));
 }
 
 function moveAxis(p, axis, d, h, boxes) {
@@ -97,9 +118,23 @@ export function rayBox(o, d, mn, mx, n) {
 export function rayMap(o, d, boxes, maxT = 500, n) {
   let t = maxT;
   const tmp = n ? [0, 0, 0] : null;
-  for (const b of boxes) {
-    const h = rayBox(o, d, b.min, b.max, tmp);
-    if (h < t) { t = h; if (n) { n[0] = tmp[0]; n[1] = tmp[1]; n[2] = tmp[2]; } }
+  const test = list => {
+    for (const b of list) {
+      const h = rayBox(o, d, b.min, b.max, tmp);
+      if (h < t) { t = h; if (n) { n[0] = tmp[0]; n[1] = tmp[1]; n[2] = tmp[2]; } }
+    }
+  };
+  const G = boxes.grid;
+  let i = G ? Math.floor(o[0] / GRID) - G.x0 : -1, j = G ? Math.floor(o[2] / GRID) - G.z0 : -1;
+  if (!G || i < 0 || j < 0 || i >= G.nx || j >= G.nz) test(boxes);
+  else {   // walk through the cells along the ray until the nearest hit lies behind us
+    const si = d[0] > 0 ? 1 : -1, sj = d[2] > 0 ? 1 : -1, di = Math.abs(GRID / d[0]), dj = Math.abs(GRID / d[2]);
+    let ti = d[0] ? ((i + G.x0 + (si > 0 ? 1 : 0)) * GRID - o[0]) / d[0] : Infinity, tj = d[2] ? ((j + G.z0 + (sj > 0 ? 1 : 0)) * GRID - o[2]) / d[2] : Infinity;
+    for (let enter = 0; enter <= t && i >= 0 && j >= 0 && i < G.nx && j < G.nz;) {
+      test(G.cells[i * G.nz + j]);
+      if (ti < tj) { enter = ti; ti += di; i += si; } else { enter = tj; tj += dj; j += sj; }
+      if (enter === Infinity) break;
+    }
   }
   if (d[1] < 0) {
     const g = -o[1] / d[1];
@@ -111,12 +146,8 @@ export function rayMap(o, d, boxes, maxT = 500, n) {
 // Thrown grenade: n = {x,y,z,vx,vy,vz}. Call with a fixed small dt so server and clients agree on the path.
 export const NADE_DT = 1 / 120;   // short enough that even the thinnest wall is never skipped
 const NADE_R = 0.1;
-const nadeHit = (x, y, z, boxes) => {
-  for (const b of boxes) {
-    if (x + NADE_R > b.min[0] && x - NADE_R < b.max[0] && y + NADE_R > b.min[1] && y - NADE_R < b.max[1] && z + NADE_R > b.min[2] && z - NADE_R < b.max[2]) return true;
-  }
-  return false;
-};
+const nadeHit = (x, y, z, boxes) => !!findBox(boxes, x, z, NADE_R, b =>
+  x + NADE_R > b.min[0] && x - NADE_R < b.max[0] && y + NADE_R > b.min[1] && y - NADE_R < b.max[1] && z + NADE_R > b.min[2] && z - NADE_R < b.max[2]);
 // Where a throw starts, rounded like the message that tells the clients about it.
 export function nadeStart(p, yaw, pitch, E) {
   const d = dirFrom(yaw, pitch), v = E.speed || 15, R = x => Math.round(x * 100) / 100;

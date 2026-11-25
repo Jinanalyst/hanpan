@@ -138,7 +138,7 @@ export class Room {
     Object.assign(p, p.want);
     Object.assign(p, {
       x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, cr: 0, crT: 0, ground: true,
-      yaw: p.team === 'red' ? Math.PI : 0, pitch: 0, hp: 100, alive: true, prot: PROTECT,
+      yaw: best[2] ?? (p.team === 'red' ? Math.PI : 0), pitch: 0, hp: 100, alive: true, prot: PROTECT,
       w: p.lo, rlT: 0, next: 0, hist: [], eqN: EQUIP[p.eq].n, eqNext: 0, healT: 0,
     });
     p.mag = {}; p.res = {};

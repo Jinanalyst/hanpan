@@ -2,10 +2,12 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Room } from '../public/shared/game.js';
-import { isMap, canPlay, randomMap, DEFAULT_MAP } from '../public/shared/map.js';
+import { isMap, isReady, canPlay, randomMap, addCity, DEFAULT_MAP } from '../public/shared/map.js';
+import { REAL } from '../public/shared/realcities.js';
 import { ownedBy } from './owned.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -17,6 +19,11 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
 };
+
+// Real city lands: a missing or broken file only takes that land away.
+for (const { id } of REAL) {
+  try { addCity(JSON.parse(fs.readFileSync(path.join(ROOT, 'maps', id + '.json'), 'utf8'))).nav; } catch (e) { console.error('[hanpan] land ' + id + ' is not available:', e.message); }
+}
 
 const rooms = [];
 let roomSeq = 1;
@@ -35,6 +42,11 @@ const server = http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     const headers = { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' };
     if (['login.html', 'servers.html'].includes(path.basename(file))) headers['x-frame-options'] = 'DENY';   // no hidden overlays on the wallet login or chat
+    if (path.extname(file) === '.json' && data.length > 8192 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      headers['content-encoding'] = 'gzip'; headers.vary = 'accept-encoding';
+      zlib.gzip(data, (e, z) => { if (e) { res.writeHead(500); res.end(); return; } res.writeHead(200, headers); res.end(z); });
+      return;
+    }
     res.writeHead(200, headers);
     res.end(data);
   });
@@ -45,7 +57,7 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8192 });
 // Each room plays one land. 'any' joins the busiest open room on a land this player may use.
 function pickRoom(want, owned) {
   const any = want === 'any';
-  const map = isMap(want) ? want : any ? randomMap(owned) : DEFAULT_MAP;
+  const map = isReady(want) ? want : any ? randomMap(owned) : DEFAULT_MAP;
   let r = rooms.filter(r => (any ? canPlay(r.map.id, owned) : r.map.id === map) && r.humanCount() < MAX_PER_ROOM)
     .sort((a, b) => b.humanCount() - a.humanCount())[0];
   if (!r) {

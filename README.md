@@ -11,7 +11,7 @@
 | 영역 | 내용 |
 |---|---|
 | 모드 | 팀 데스매치. 15킬 또는 10분이 지나면 승패가 나고, 10초 뒤 다음 판이 자동으로 시작 |
-| 전장 | 도시 6곳(Tokyo Crossing, Seoul Gate, New York Square, Paris Boulevard, London Row, Dubai Marina, 모두 무료), 무료 전장 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
+| 전장 | 도시 6곳(Tokyo Crossing, Seoul Gate, New York Square, Paris Boulevard, London Row, Dubai Marina, 모두 무료), 실제 거리 1곳(Seoul Gangnam, OpenStreetMap 기반), 무료 전장 5곳(Desert Compound, Harbor Yard, Frost Station, Night Market, Jungle Ruins), 유료 3곳(Orbital Dock, Ember Foundry, Blossom Palace). Any land를 고르면 사람이 가장 많은 방에 들어감 |
 | 캐릭터 | `/character.html`에서 3D 병사를 꾸밈: 헤드기어 9종, 얼굴 7종, 군복 8종, 방탄복 5종, 배낭 5종, 장갑, 군화, 벨트 장비, 총 도색 8종. 키트 3개 저장. 외형은 능력치에 영향 없음. 온라인에서 다른 사람에게도 보이고, 팀 색 완장·띠·등 패치는 항상 표시됨 |
 | 장비(G) | 파편 수류탄, 연막탄(봇 시야도 가림), 섬광탄, 화염병, 원격 폭탄, 구급 키트 중 하나. G를 누르고 있으면 궤적이 보이고, 떼면 던짐(우클릭 취소). 원격 폭탄은 G를 다시 누르면 폭발. 서버가 궤적·폭발·회복을 판정 |
 | 무기 | 무료 주무기 4종(카빈, 마크스맨 라이플, 전투소총, 불펍)과 보조무기 3종(권총, 리볼버, 기관권총). 탄 퍼짐, 반동, 거리별 데미지 감소, 헤드샷 2배 |
@@ -34,6 +34,27 @@ npm test             # 판정·봇·서버 접속 스모크 테스트
 ```
 
 브라우저 탭 두 개로 접속하면 서로 싸울 수 있습니다.
+
+## 실제 도시 맵 (OpenStreetMap)
+
+`tools/osm/cities.json`에 도시를 적고 빌드 타임에 한 번 실행합니다. 게임은 실행 중에 Overpass를 부르지 않습니다.
+
+```bash
+npm run maps gangnam              # public/maps/gangnam.json 생성 (받은 원본은 tools/osm/cache에 보관)
+npm run maps gangnam -- --refresh # 원본을 다시 받기
+npm run maps all                  # 설정에 있는 모든 도시
+```
+
+- 영역은 `center` + `radius`(원) 또는 `bbox: [남, 서, 북, 동]`. `defaults`의 값은 도시별로 바꿀 수 있음
+- 높이는 height → building:levels × 3.2 m → 12 m. 좌표는 도시의 주된 건물 방향이 축에 맞도록 돌려서 저장(`turn`)
+- 실제 상호는 저장하지 않음. 업종별 가상 상호는 `tools/osm/shops.json`의 단어로 만들고, 원본 데이터에 있는 이름과 겹치면 버림
+- `play`는 전투 구역 반지름(m), `sidewalk`는 도로 종류별 인도 폭(한쪽), `drive`는 통행 방향
+- gzip 5 MB를 넘으면 실패로 끝남
+- 빌드할 때 충돌 박스, 경계 펜스, 차량과 엄폐물, 스폰을 정해 같은 파일에 저장함. 서버와 화면이 같은 값을 쓰므로 어긋나지 않음(`tools/osm/arena.mjs`)
+- 스폰은 중심까지 걷는 거리가 비슷하고 서로 보이지 않는 두 곳을 고름. 전투 구역의 빈 1층은 가상 매장으로 채움
+- 만든 도시는 `public/shared/realcities.js`에 자동으로 등록되어 메뉴에 나타남. 도시 파일은 고를 때만 받음
+- 확인과 성능 측정: `npm start` 후 `/cityview.html?city=gangnam`
+- 데이터는 © OpenStreetMap contributors (ODbL). 도시가 보이는 모든 화면에 이 출처 표기가 있어야 함
 
 ## 호스팅어 비즈니스 플랜에 올리기
 

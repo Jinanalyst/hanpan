@@ -108,6 +108,16 @@ function drawCamo({ base, c, kind }) {
 }
 
 /* ---- merge ---- */
+// Plain materials become one: colour, roughness, metalness and glow move into the points, so the look stays and a soldier is a few draw calls.
+const PLAIN = new THREE.MeshStandardMaterial({ vertexColors: true });
+PLAIN.userData.shared = true;
+PLAIN.onBeforeCompile = s => {
+  s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 aRM; attribute vec3 aGlow; varying vec2 vRM; varying vec3 vGlow;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvRM = aRM; vGlow = aGlow;');
+  s.fragmentShader = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vRM; varying vec3 vGlow;')
+    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vRM.x;').replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vRM.y;')
+    .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance += vGlow;');
+};
+const isPlain = m => m?.isMeshStandardMaterial && !m.map && !m.transparent && m.side === THREE.FrontSide && !m.vertexColors;
 // Replaces the direct children of a group (and their children) with one mesh per material. Groups marked keep stay.
 const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), N = new THREE.Vector3(), nm = new THREE.Matrix3();
 export function bake(g, shadow = true) {
@@ -121,9 +131,11 @@ export function bake(g, shadow = true) {
       if (c.isMesh) {
         c.updateWorldMatrix(true, false);
         M.multiplyMatrices(inv, c.matrixWorld);
-        let b = bins.get(c.material);
-        if (!b) bins.set(c.material, b = { p: [], n: [], uv: [] });
+        const m = c.material, plain = isPlain(m), key = plain ? PLAIN : m;
+        let b = bins.get(key);
+        if (!b) bins.set(key, b = { p: [], n: [], uv: [], c: [], rm: [], gl: [] });
         add(b, c.geometry, M);
+        if (plain) for (let i = b.c.length; i < b.p.length; i += 3) { b.c.push(m.color.r, m.color.g, m.color.b); b.rm.push(m.roughness, m.metalness); b.gl.push(m.emissive.r * m.emissiveIntensity, m.emissive.g * m.emissiveIntensity, m.emissive.b * m.emissiveIntensity); }
       }
       walk(c);
     }
@@ -135,6 +147,7 @@ export function bake(g, shadow = true) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(b.p, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.n, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+    if (m === PLAIN) for (const [k, list, n] of [['color', b.c, 3], ['aRM', b.rm, 2], ['aGlow', b.gl, 3]]) geo.setAttribute(k, new THREE.Float32BufferAttribute(list, n));
     const mesh = new THREE.Mesh(geo, m);
     mesh.castShadow = shadow && !m.transparent;
     g.add(mesh);

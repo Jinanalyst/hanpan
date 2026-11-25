@@ -1,0 +1,33 @@
+{
+  "defaults": {
+    "play": 100,
+    "endpoints": ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"],
+    "levelHeight": 3.2,
+    "defaultHeight": 12,
+    "minHeight": 2.5,
+    "minArea": 6,
+    "simplify": 0.15,
+    "rotate": "auto",
+    "laneWidth": 3.2,
+    "roadWidth": {
+      "motorway": 14, "trunk": 14, "primary": 13, "secondary": 10, "tertiary": 8,
+      "motorway_link": 6, "trunk_link": 6, "primary_link": 5, "secondary_link": 5, "tertiary_link": 5,
+      "residential": 6, "unclassified": 6, "living_street": 5, "busway": 3.5, "service": 4, "pedestrian": 6,
+      "footway": 2, "path": 2, "cycleway": 2, "steps": 2.5, "platform": 3
+    },
+    "drive": "right",
+    "sidewalk": { "motorway": 4, "trunk": 6, "primary": 6, "secondary": 5, "tertiary": 4, "primary_link": 4, "secondary_link": 3, "tertiary_link": 3, "unclassified": 2, "residential": 3 },
+    "ignorePoi": [
+      "parking", "parking_space", "parking_entrance", "bicycle_parking", "bicycle_rental", "motorcycle_parking", "charging_station", "bench",
+      "waste_basket", "waste_disposal", "recycling", "toilets", "shelter", "drinking_water", "fountain", "telephone", "post_box",
+      "vending_machine", "atm", "clock", "bbq", "grit_bin", "loading_dock", "taxi", "car_sharing", "vacant", "no", "yes",
+      "smoking_area", "bus_station", "ferry_terminal", "place_of_worship", "grave_yard", "compressed_air", "water_point", "public_bookcase", "ticket_validator"
+    ]
+  },
+  "cities": {
+    "gangnam": { "name": "Seoul Gangnam", "desc": "Real streets around Gangnam Station", "center": [37.49794, 127.02762], "radius": 400 },
+    "shibuya": { "name": "Tokyo Shibuya", "desc": "Real streets around Shibuya Crossing", "center": [35.6595, 139.70055], "radius": 400, "drive": "left" },
+    "opera": { "name": "Paris Opera", "desc": "Real streets around Place de l'Opera", "center": [48.87098, 2.33188], "radius": 400 },
+    "timessquare": { "name": "New York Times Square", "desc": "Real streets around Times Square", "center": [40.758, -73.98555], "radius": 400 }
+  }
+}

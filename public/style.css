@@ -219,3 +219,6 @@ button.srv{background:none;border-color:transparent;padding:4px 8px}button.srv:h
 @media(max-width:940px){.charPage{overflow:auto;height:auto}.char{display:block}.locker{border-left:0;border-top:2px solid #5b6240}.lockerBody{display:block}
 .slots{display:flex;gap:14px;border-right:0;border-bottom:1px solid #5b6240}.slots div{display:flex;flex:none;gap:4px;align-items:center}.slots h2{display:none}.slots button{flex:none;width:auto;white-space:nowrap;margin:0}.deploy{position:sticky;bottom:0;background:var(--olive);flex-wrap:wrap}
 .stage{display:flex;flex-direction:column;gap:12px;padding:10px 14px 14px}.stage canvas{position:static;height:min(54vh,440px)}.stageBar{position:static;padding:0}.idBox{position:static;order:1;width:100%;padding:2px 12px 8px}.idBox label{margin:4px 0}.storeTop nav{white-space:nowrap}}
+
+/* credit for real city lands: always on top, also over the menu */
+#osm{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:20}#osm .osm{display:block;padding:1px 8px;background:rgba(255,255,255,.82);color:#16324a;font:500 12px/1.5 Rajdhani,sans-serif;text-decoration:none;border-radius:3px 3px 0 0}#osm .osm:hover{text-decoration:underline}

@@ -1,14 +1,17 @@
 // Smoke tests: hit detection, bot matches, and a real WebSocket join against the server.
+import { ring, area } from '../public/shared/osmgeo.js';
+import zlib from 'node:zlib';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import { Room, cleanChat, KILL_LIMIT } from '../public/shared/game.js';
 import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
-import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
+import { getMap, addCity, isReady, randomMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
+import { REAL } from '../public/shared/realcities.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
 import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
-import { hits, hitbox, rayMap, stanceH, fitStance, PHYS } from '../public/shared/physics.js';
+import { hits, hitbox, rayMap, stanceH, fitStance, step, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -390,6 +393,34 @@ for (const id of MAP_IDS) {
     assert.deepEqual(forged.got, [{ t: 'deny', why: 'check' }]);
     assert.equal(gun.got.find(m => m.t === 'welcome').lo, 'rifle');
     for (let i = 0; i < 3; i++) assert.notEqual(land(await join('Any' + i, 'any')), 'palace', 'any never opens a locked land');
+    // a real city online: both clients and the server agree on every wall, so walking is never corrected and walls cannot be entered
+    {
+      const [g1, g2] = await Promise.all([join('City1', 'gangnam'), join('City2', 'gangnam')]), city = addCity(JSON.parse(fs.readFileSync(new URL('../public/maps/gangnam.json', import.meta.url), 'utf8')));
+      assert.deepEqual([g1, g2].map(land), ['gangnam', 'gangnam']);
+      const me = g1.got.find(m => m.t === 'welcome').id, p = { ...g1.got.filter(m => m.t === 'tp').at(-1), vx: 0, vy: 0, vz: 0, ground: true, cr: 0 }, tps = () => g1.got.filter(m => m.t === 'tp').length, before = tps();
+      const from = [p.x, p.z];
+      for (let i = 0; i < 40; i++) {   // two seconds of walking towards the middle, with the same code the browser runs
+        for (let k = 0; k < 3; k++) step(p, -Math.sin(p.yaw), -Math.cos(p.yaw), PHYS.walk, 1 / 60, city.boxes);
+        g1.ws.send(JSON.stringify({ t: 'in', sp: p.sp, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: 0, cr: 0 }));
+        await sleep(50);
+      }
+      await sleep(150);
+      const dead = g1.got.filter(m => m.t === 's').some(m => !m.me.al);
+      if (!dead) {
+        assert.equal(tps(), before, 'the server never moved the player back');
+        const seen = g2.got.filter(m => m.t === 's').at(-1).ps.find(q => q[0] === me);
+        assert.ok(Math.hypot(seen[1] - p.x, seen[3] - p.z) < 0.02, 'the other player sees the same place');
+        assert.ok(Math.hypot(p.x - from[0], p.z - from[1]) > 3, 'it did move');
+        const wall = city.boxes.filter(b => b.kind === 'building').sort((a, b) => Math.hypot((a.min[0] + a.max[0]) / 2 - p.x, (a.min[2] + a.max[2]) / 2 - p.z) - Math.hypot((b.min[0] + b.max[0]) / 2 - p.x, (b.min[2] + b.max[2]) / 2 - p.z))[0];
+        g1.ws.send(JSON.stringify({ t: 'in', sp: p.sp, x: (wall.min[0] + wall.max[0]) / 2, y: 0, z: (wall.min[2] + wall.max[2]) / 2, yaw: 0, pitch: 0, cr: 0 }));
+        await sleep(150);
+        assert.equal(tps(), before + 1, 'no walking into a building');
+      }
+      const zipped = await fetch(`http://localhost:${port}/maps/gangnam.json`);
+      assert.equal(zipped.headers.get('content-encoding'), 'gzip'); assert.equal((await zipped.json()).id, 'gangnam');
+      g1.ws.close(); g2.ws.close();
+      console.log('ok  city online: same walls on both sides' + (dead ? ' (walker was shot, walking checks skipped)' : ''));
+    }
     // voice over the real connection: only the teammate hears it
     const four = await Promise.all(['V1', 'V2', 'V3', 'V4', 'V5', 'V6'].map(n => joinVoice(n)));
     const me = four[0], mates = four.filter(c => c !== me && c.team === me.team), foes = four.filter(c => c.team !== me.team);
@@ -412,4 +443,74 @@ for (const id of MAP_IDS) {
     sb.close(); sb.closeAllConnections();
   }
 }
+// Generated cities: complete, small, credited, and nothing but invented shop names
+for (const file of fs.readdirSync(new URL('../public/maps/', import.meta.url))) {
+  const text = fs.readFileSync(new URL('../public/maps/' + file, import.meta.url)), c = JSON.parse(text);
+  assert.ok(zlib.gzipSync(text).length < 5 * 1024 * 1024, file + ': under 5 MB');
+  assert.equal(c.source.attribution, '© OpenStreetMap contributors');
+  assert.ok(c.buildings.length > 50 && c.roads.length > 20 && c.play > 0, file + ': has a city in it');
+  for (const b of c.buildings) {
+    assert.ok(b.p.length >= 6 && b.p.length % 2 === 0 && b.p.every(Number.isInteger) && b.h > (b.b || 0) && b.n >= 1 && [0, 1, 2, 3].includes(b.f), file + ': building');
+    assert.ok(area(ring(b.p, c.unit)) > 0, file + ': outline direction');
+  }
+  const signs = readShopWords();
+  for (const [cat, name] of c.shopNames) assert.ok(signs[cat].words.some(w => name.startsWith(w + ' ')), file + ': invented name ' + name);
+  for (const [x, z, , w, cat, name] of c.shops) {
+    assert.ok(w >= 20 && c.shopNames[name][0] === cat, file + ': shop');
+    const d = Math.min(...c.buildings.map(b => ring(b.p, 1)).flatMap(p => p.map((a, i) => wallDist(x, z, a, p[(i + 1) % p.length]))));
+    assert.ok(d < 2, file + ': shop stands on a wall');
+  }
+  console.log(`ok  city ${file}: ${c.buildings.length} buildings, ${c.shops.length} shops, ${c.roads.length} roads`);
+}
+// The fighting area of each real city: walls where the buildings are, open and connected, fair spawns, bots meet
+for (const { id } of REAL) {
+  assert.ok(!isReady(id) || getMap(id).city); assert.ok(MAP_LIST.some(m => m.id === id && m.real));
+  if (!isReady(id)) assert.equal(getMap(id).spawns.red.length, 0, 'only a plan before it is loaded');
+  const data = JSON.parse(fs.readFileSync(new URL('../public/maps/' + id + '.json', import.meta.url))), map = addCity(data), H = map.size[0], flat = [...map.boxes];
+  assert.ok(isReady(id) && getMap(id) === map);
+  // the cells give the same answers as testing every box
+  const { points, main } = map.nav;
+  for (let i = 0; i < 3000; i++) {
+    const p = points[i % points.length], o = [p[0] + Math.sin(i) * 1.5, (i % 7) * 0.5 + 0.1, p[1] + Math.cos(i * 1.7) * 1.5], a = i * 0.77, e = Math.sin(i * 0.31) * 0.5, d = [Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e)];
+    assert.ok(Math.abs(rayMap(o, d, flat, 200) - rayMap(o, d, map.boxes, 200)) < 1e-6); assert.equal(!!hits(...o, 1.75, flat), !!hits(...o, 1.75, map.boxes));
+  }
+  for (const d of [[0, 0, -1], [1, 0, 0], [0, -1, 0]]) assert.ok(Math.abs(rayMap([0.5, 1, 0.5], d, flat) - rayMap([0.5, 1, 0.5], d, map.boxes)) < 1e-6, 'straight rays');
+  // collision follows the drawn outlines
+  const inside = (x, z, p) => { let r = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) if ((p[i][1] > z) !== (p[j][1] > z) && x < (p[j][0] - p[i][0]) * (z - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) r = !r; return r; };
+  const outlines = data.buildings.filter(b => !b.b).map(b => ({ p: ring(b.p, data.unit), o: (b.o || []).map(h => ring(h, data.unit)) })), near = (x, z) => outlines.some(({ p, o }) => [p, ...o].some(r => r.some((a, i) => wallDist(x, z, a, r[(i + 1) % r.length]) < 0.45)));
+  let n = 0;
+  for (let x = -H + 1; x < H - 1; x += 1.7) for (let z = -H + 1; z < H - 1; z += 1.7) {
+    const drawn = outlines.some(({ p, o }) => inside(x, z, p) && !o.some(h => inside(x, z, h))), solid = map.boxes.some(b => b.kind === 'building' && !b.min[1] && x > b.min[0] && x < b.max[0] && z > b.min[2] && z < b.max[2]);
+    if (drawn !== solid && !near(x, z)) n++;
+  }
+  assert.equal(n, 0, id + ': walls are where the buildings are');
+  // nobody gets out
+  for (let a = 0; a < 360; a += 1) { const t = rayMap([points[main[0]][0], 1, points[main[0]][1]], [Math.cos(a), 0, Math.sin(a)], map.boxes, 400); assert.ok(t < H * 3, id + ': closed at ' + a); }
+  assert.ok(points.every(([x, z]) => Math.abs(x) < H && Math.abs(z) < H));
+  assert.ok(main.length > points.length * 0.9, id + ': floor is connected');
+  for (const t of ['red', 'blue']) {
+    assert.ok(map.spawns[t].length >= 7);
+    for (const [x, z, yaw] of map.spawns[t]) { assert.ok(!hits(x, 0, z, PHYS.h, map.boxes), id + ': spawn is open'); assert.ok(Math.cos(yaw - Math.atan2(x, z)) > 0.9, 'faces the middle'); }
+  }
+  for (const a of map.spawns.red) for (const b of map.spawns.blue) { const d = [b[0] - a[0], 0, b[1] - a[1]], L = Math.hypot(...d); assert.ok(rayMap([a[0], 1.6, a[1]], d.map(v => v / L), map.boxes, L) < L - 0.2, id + ': spawns cannot see each other'); }
+  const room = new Room({ minPlayers: 12, map: id, killLimit: 999 }), realNow = performance.now.bind(performance);
+  room.addPlayer('Watcher', 'rifle', () => {});
+  const W = room.players.get(1);
+  let fake = realNow(), slow = 0, legs = 0;
+  const from = new Map();
+  performance.now = () => fake;
+  for (let i = 0; i < 30 * 240; i++) {
+    fake += 1000 / 30; room.update(1 / 30); W.prot = 99; W.hp = 100;
+    if (i % 60) continue;
+    for (const p of room.players.values()) { const tag = p.alive && !p.ai?.target ? p.sp : -1, f = from.get(p.id); if (p.bot && f && tag >= 0 && f.tag === tag) { legs++; if (Math.hypot(p.x - f.x, p.z - f.z) < 1) slow++; } from.set(p.id, { x: p.x, z: p.z, tag }); }
+  }
+  performance.now = realNow;
+  const { red, blue } = room.score;
+  assert.ok(red + blue > 15, id + ': the teams meet'); assert.ok(slow < legs * 0.15, id + ': bots are not stuck');
+  console.log(`ok  city ${id}: ${map.boxes.length} boxes, ${red + blue} bot kills in 4 simulated minutes (red ${red} / blue ${blue}), stuck ${slow}/${legs}`);
+}
+assert.ok(MAP_IDS.includes(randomMap()) || REAL.some(c => c.id === randomMap()));
+function readShopWords() { return JSON.parse(fs.readFileSync(new URL('../tools/osm/shops.json', import.meta.url))).categories; }
+function wallDist(x, z, a, b) { const dx = b[0] - a[0], dz = b[1] - a[1], k = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1))); return Math.hypot(x - a[0] - dx * k, z - a[1] - dz * k); }
+
 console.log('all smoke tests passed');
