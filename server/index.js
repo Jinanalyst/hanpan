@@ -57,10 +57,11 @@ function pickRoom(want, owned) {
 
 wss.on('connection', ws => {
   let room = null, joining = false, id = 0, count = 0, windowStart = Date.now();
-  ws.on('message', async buf => {
+  ws.on('message', async (buf, binary) => {
     const t = Date.now();
     if (t - windowStart > 1000) { windowStart = t; count = 0; }
-    if (++count > 150) { ws.close(1008, 'rate limit'); return; }   // ~20 inputs + ~12 shots per second is normal
+    if (++count > 150) { ws.close(1008, 'rate limit'); return; }   // ~20 inputs + ~12 shots + 25 voice packets per second is normal
+    if (binary) { if (room && Buffer.isBuffer(buf)) room.voice(id, buf); return; }
     let m;
     try { m = JSON.parse(buf.toString()); } catch { return; }
     if (!m || typeof m.t !== 'string') return;
@@ -76,7 +77,8 @@ wss.on('connection', ws => {
         return;
       }
       room = pickRoom(m.map, owned);
-      id = room.addPlayer(typeof m.name === 'string' ? m.name : '', m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }, owned);
+      id = room.addPlayer(typeof m.name === 'string' ? m.name : '', m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }, owned,
+        packet => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(packet); });   // on a slow line voice is dropped before the game lags
       console.log(`[join] ${room.id} ${room.map.id} #${id} (${room.humanCount()} humans)`);
       return;
     }

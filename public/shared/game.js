@@ -3,6 +3,7 @@
 import { getMap, randomRoute } from './map.js';
 import { PHYS, step, rayMap, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS, isPrimary, damageAt } from './weapons.js';
+import { PACKET } from './adpcm.js';
 
 export const MATCH_TIME = 600;   // seconds
 export const KILL_LIMIT = 50;
@@ -17,6 +18,11 @@ const r2 = v => Math.round(v * 100) / 100;
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
 export const cleanName = s => String(s || '').replace(/[^\p{L}\p{N} _\-]/gu, '').trim().slice(0, 16) || 'Soldier';
+
+// Chat text: one line, no control or direction-flipping characters, at most 120 characters.
+export const cleanChat = s => typeof s !== 'string' ? '' : [...s.replace(/[\p{Cc}\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, 120).join('');
+const CHAT_BURST = 4, CHAT_EVERY = 1.5;   // messages at once, then seconds per message
+const VOICE_PER_SEC = 25;                 // packets of 40 ms
 
 export class Room {
   constructor(o = {}) {
@@ -54,6 +60,7 @@ export class Room {
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
+      sendBin: null, chatN: CHAT_BURST, chatAt: now(), voiceN: VOICE_PER_SEC, voiceAt: now(),
       ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05) } : null,
     };
     p.lo = this.pickPrimary(p, lo);
@@ -61,8 +68,9 @@ export class Room {
     return p;
   }
 
-  addPlayer(name, lo, send, owned) {
+  addPlayer(name, lo, send, owned, sendBin) {
     const p = this.newPlayer(name, lo, false, send, owned);
+    p.sendBin = sendBin || null;
     this.spawn(p);
     p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, map: this.map.id, lo: p.lo, limit: this.killLimit });
     this.balanceBots();
@@ -154,7 +162,35 @@ export class Room {
         if (p.alive && (m.w === p.lo || m.w === 'pistol') && m.w !== p.w) { p.w = m.w; p.rlT = 0; p.next = t + 0.35; }
         break;
       case 'lo': p.lo = this.pickPrimary(p, m.lo); break;
+      case 'c': this.chat(p, m.x); break;
       case 'po': if (Number.isFinite(m.s)) p.ping = clampN(t - m.s, 0, 1); break;
+    }
+  }
+
+  // ---- team talk ----
+  chat(p, text) {
+    const x = cleanChat(text), t = now();
+    if (!x) return;
+    p.chatN = Math.min(CHAT_BURST, p.chatN + (t - p.chatAt) / CHAT_EVERY);
+    p.chatAt = t;
+    if (p.chatN < 1) { p.send({ t: 'cx' }); return; }   // too fast
+    p.chatN--;
+    for (const q of this.players.values()) if (!q.bot && q.team === p.team) q.send({ t: 'c', id: p.id, x });
+  }
+
+  // One voice packet, passed on to human teammates only.
+  voice(id, data) {
+    const p = this.players.get(id), t = now();
+    if (!p || p.bot || data.byteLength !== PACKET) return;
+    p.voiceN = Math.min(VOICE_PER_SEC, p.voiceN + (t - p.voiceAt) * VOICE_PER_SEC * 1.1);
+    p.voiceAt = t;
+    if (p.voiceN < 1) return;
+    p.voiceN--;
+    let packet = null;
+    for (const q of this.players.values()) {
+      if (q === p || q.team !== p.team || !q.sendBin) continue;
+      if (!packet) { packet = new Uint8Array(4 + PACKET); new DataView(packet.buffer).setUint32(0, id, true); packet.set(data, 4); }
+      q.sendBin(packet);
     }
   }
 

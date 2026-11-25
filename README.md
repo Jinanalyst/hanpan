@@ -20,6 +20,7 @@
 | UI | 미니맵, 킬피드, 스코어보드(Tab), 피격 방향 표시, 히트마커, 리스폰 화면 |
 | 상점 | 유료 무기 4종과 전장 3곳을 NOWPayments 암호화폐(SOL 등)로 구매. 온라인에서는 게임 서버가 소유 여부를 확인하고, 연습 모드에서는 모두 무료로 체험 |
 | 로그인(선택) | 솔라나 지갑 서명으로 로그인(Supabase Auth). 로그인하지 않아도 게스트로 플레이 가능 |
+| 팀 대화 | V를 누르고 있는 동안 팀 음성, Enter로 팀 채팅. 음성은 게임 서버가 같은 팀에게만 중계(플레이어끼리 IP가 노출되지 않고 녹음하지 않음). Esc 화면에서 팀원별 음소거 |
 | 연습 모드 | 서버 없이 브라우저에서 봇과 대전. 서버와 **같은 게임 코드**를 그대로 실행 |
 
 ## 로컬 실행
@@ -105,6 +106,8 @@ server/index.js          HTTP 정적 파일 + WebSocket, 방 배정, 30Hz 틱
 public/index.html        클라이언트 페이지
 public/login.html/.js    솔라나 지갑 로그인 페이지
 public/store.html/.js    상점 페이지
+public/voice.js          팀 음성(녹음·재생), voice-worklet.js는 마이크 처리
+public/shared/adpcm.js   음성 압축 (말하는 사람당 약 8KB/s)
 public/floorplan.js      전장 미니 평면도
 server/owned.js          플레이어가 가진 상품 조회 (비밀 키 불필요)
 supabase/migrations/     상점 DB 테이블, 권한, 함수
@@ -124,7 +127,7 @@ test/smoke.js            스모크 테스트
 
 ## 프로토콜 (JSON over WebSocket `/ws`)
 
-클라이언트 → 서버: `join{name,lo,map,token}`(map은 전장 id 또는 `any`, token은 로그인한 경우의 Supabase 토큰), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `po{s}`(핑 응답)
+클라이언트 → 서버: `join{name,lo,map,token}`(map은 전장 id 또는 `any`, token은 로그인한 경우의 Supabase 토큰), `in{sp,x,y,z,yaw,pitch,cr}`(20Hz), `f{yaw,pitch}`(발사), `r`(장전), `w{w}`(무기 교체), `c{x}`(팀 채팅), 바이너리(음성 324바이트, 초당 25개), `po{s}`(핑 응답)
 서버 → 클라이언트: `welcome`, `tp`(위치 강제 이동), `s`(스냅샷), `ro`(명단), `sh`(다른 사람 사격), `hit`, `dmg`, `k`(킬), `rl`(장전 시작), `end`/`start`, `pi`(핑)
 
 ## 실제 서비스 전에 해야 할 것 (우선순위 순서)

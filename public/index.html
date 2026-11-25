@@ -24,6 +24,9 @@
   <div id="hpbox"><span id="hpN">100</span><div class="bar"><i id="hpB"></i></div></div>
   <div id="ammobox"><div id="wName">Carbine</div><div class="ammo"><b id="ammoN">30</b><span id="resN">/ 150</span></div><div class="bar"><i id="rlB"></i></div></div>
   <div id="net"></div>
+  <div id="talk"></div>
+  <div id="chatBox"><div id="chatLog" role="log" aria-label="Team chat"></div><div id="chatRow" hidden><span>Team</span><input id="chatIn" type="text" maxlength="120" autocomplete="off" aria-label="Message to your team"></div></div>
+  <div id="micBox" hidden></div>
   <div id="center"></div>
   <div id="board" hidden></div>
 </div>
@@ -38,13 +41,15 @@
     <div class="seg" id="loSeg"></div>
     <span class="lbl" id="landLbl">Land</span>
     <div class="lands" id="landSeg" role="group" aria-labelledby="landLbl"></div>
+    <label class="check"><input id="voiceOn" type="checkbox"> Team voice (hold V to talk)</label>
     <label for="sensIn">Mouse sensitivity <output id="sensOut"></output></label>
     <input id="sensIn" type="range" min="0.5" max="3" step="0.1">
     <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button><p id="status" role="status"></p></div>
     <details><summary>Controls</summary>
       <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Space</b> jump</li>
       <li><b>Left click</b> fire · <b>Right click</b> aim down sights · <b>R</b> reload</li>
-      <li><b>1 / 2</b> primary / sidearm · <b>Tab</b> scoreboard · <b>Esc</b> pause</li></ul>
+      <li><b>1 / 2</b> primary / sidearm · <b>Tab</b> scoreboard · <b>Esc</b> pause</li>
+      <li>Hold <b>V</b> to talk to your team · <b>Enter</b> team chat</li></ul>
       <p class="small">Desktop with mouse and keyboard.</p>
     </details>
   </div>
@@ -54,6 +59,7 @@
   <div class="card small-card">
     <h2>Paused</h2>
     <p>The match keeps running while you are here.</p>
+    <div id="mutes" hidden><h3>Teammates</h3><ul></ul></div>
     <div class="go"><button id="resume" class="primary">Resume</button><button id="leave">Leave match</button></div>
   </div>
 </div>

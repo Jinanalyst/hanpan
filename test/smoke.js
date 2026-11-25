@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import { Room } from '../public/shared/game.js';
+import { Room, cleanChat } from '../public/shared/game.js';
+import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
 import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
 import { WEAPONS, damageAt } from '../public/shared/weapons.js';
 import { hits, PHYS } from '../public/shared/physics.js';
@@ -120,7 +121,48 @@ for (const id of MAP_IDS) {
   console.log('ok  store: fair weapons, locks, catalogue, shotgun');
 }
 
-// 5) Real server: two clients join, receive snapshots, see each other in the roster
+// 5) Team talk: text and voice reach teammates only, are cleaned and limited, and speech survives compression
+{
+  assert.equal(cleanChat('  hi\n\u202Eevil\u0000  there  '), 'hi evil there');
+  assert.equal([...cleanChat('가😀'.repeat(200))].length, 120);
+  for (const bad of [null, 5, {}, [], undefined]) assert.equal(cleanChat(bad), '');
+  const room = new Room({ minPlayers: 0 }), P = [];
+  for (let i = 0; i < 4; i++) { const p = { txt: [], bin: [] }; p.id = room.addPlayer('P' + i, 'rifle', m => p.txt.push(m), undefined, b => p.bin.push(b)); p.team = room.players.get(p.id).team; P.push(p); }
+  const [a] = P, mate = P.find(p => p !== a && p.team === a.team), foes = P.filter(p => p.team !== a.team);
+  assert.equal(foes.length, 2);
+  const chats = p => p.txt.filter(m => m.t === 'c');
+  room.onMessage(a.id, { t: 'c', x: '  안녕 <b>team</b> ' });
+  assert.deepEqual(chats(mate), [{ t: 'c', id: a.id, x: '안녕 <b>team</b>' }]);
+  assert.equal(chats(a).length, 1, 'sender sees it too');
+  for (const f of foes) assert.equal(chats(f).length, 0, 'enemies do not see team chat');
+  for (const x of ['', '   ', null, {}, '\u0000']) room.onMessage(a.id, { t: 'c', x });
+  assert.equal(chats(mate).length, 1);
+  for (let i = 0; i < 20; i++) room.onMessage(a.id, { t: 'c', x: 'spam ' + i });
+  assert.ok(chats(mate).length <= 4 && a.txt.some(m => m.t === 'cx'), 'flood stopped');
+  // voice
+  const pkt = new Uint8Array(PACKET).fill(7);
+  room.voice(a.id, pkt);
+  assert.equal(mate.bin.length, 1); assert.equal(mate.bin[0].length, 4 + PACKET);
+  assert.equal(new DataView(mate.bin[0].buffer).getUint32(0, true), a.id, 'labelled with the real sender');
+  for (const p of [a, ...foes]) assert.equal(p.bin.length, 0, 'not to enemies or back to the speaker');
+  room.voice(a.id, new Uint8Array(PACKET - 1)); room.voice(a.id, new Uint8Array(5000)); room.voice(999, pkt);
+  assert.equal(mate.bin.length, 1, 'wrong sizes and unknown players ignored');
+  for (let i = 0; i < 300; i++) room.voice(a.id, pkt);
+  assert.ok(mate.bin.length <= 26, 'voice flood stopped');
+  // sound quality of a speech-like signal
+  const st = { value: 0, index: 0 };
+  let sig = 0, err = 0;
+  for (let f = 0; f < 25; f++) {
+    const pcm = Int16Array.from({ length: FRAME }, (_, i) => { const t = (f * FRAME + i) / RATE; return 6000 * Math.sin(6.283 * 180 * t) + 3000 * Math.sin(6.283 * 900 * t) + 1200 * Math.sin(6.283 * 2300 * t); });
+    const back = decode(encode(pcm, st));
+    if (f) for (let i = 0; i < FRAME; i++) { sig += pcm[i] ** 2; err += (pcm[i] - back[i] * 32768) ** 2; }
+  }
+  const db = 10 * Math.log10(sig / err);
+  assert.ok(db > 18, `voice quality ${db.toFixed(1)} dB`);
+  console.log(`ok  team chat and voice: team only, cleaned, limited, quality ${db.toFixed(1)} dB`);
+}
+
+// 6) Real server: two clients join, receive snapshots, see each other in the roster
 {
   const port = 3999;
   const sb = http.createServer((q, r) => { const ok = q.headers.authorization === 'Bearer a.b.owner'; r.writeHead(ok ? 200 : 401); r.end(ok ? '[{"product_id":"land:palace"},{"product_id":"weapon:dmr"}]' : '{}'); }).listen(3998);
@@ -133,6 +175,13 @@ for (const id of MAP_IDS) {
     ws.on('message', d => got.push(JSON.parse(d)));
     ws.on('error', rej);
     setTimeout(() => res({ ws, got }), 1200);
+  });
+  const joinVoice = name => new Promise((res, rej) => {
+    const c = { ws: new WebSocket(`ws://localhost:${port}/ws`), bin: [] };
+    c.ws.on('open', () => c.ws.send(JSON.stringify({ t: 'join', name, lo: 'rifle', map: 'ruins' })));
+    c.ws.on('message', (d, binary) => { if (binary) { c.bin.push(d); return; } const m = JSON.parse(d); if (m.t === 'welcome') { c.id = m.id; c.team = m.team; } });
+    c.ws.on('error', rej);
+    setTimeout(() => res(c), 800);
   });
   try {
     const [c1, c2] = await Promise.all([join('One'), join('Two')]);
@@ -163,13 +212,23 @@ for (const id of MAP_IDS) {
     assert.deepEqual(forged.got, [{ t: 'deny', why: 'check' }]);
     assert.equal(gun.got.find(m => m.t === 'welcome').lo, 'rifle');
     for (let i = 0; i < 3; i++) assert.notEqual(land(await join('Any' + i, 'any')), 'palace', 'any never opens a locked land');
+    // voice over the real connection: only the teammate hears it
+    const four = await Promise.all(['V1', 'V2', 'V3', 'V4', 'V5', 'V6'].map(n => joinVoice(n)));
+    const me = four[0], mates = four.filter(c => c !== me && c.team === me.team), foes = four.filter(c => c.team !== me.team);
+    assert.ok(mates.length && foes.length);
+    me.ws.send(new Uint8Array(PACKET).fill(3)); me.ws.send(new Uint8Array(10));
+    await sleep(300);
+    for (const c of mates) assert.deepEqual(c.bin.map(b => [b.length, b.readUInt32LE(0)]), [[4 + PACKET, me.id]]);
+    for (const c of [me, ...foes]) assert.equal(c.bin.length, 0);
+    for (const c of four) c.ws.close();
     // malformed messages must not stop the server
+    { const early = new WebSocket(`ws://localhost:${port}/ws`); await new Promise(r => early.on('open', r)); early.send(new Uint8Array(PACKET)); early.send(new Uint8Array(3)); await sleep(50); early.close(); }
     gun.ws.send('{"t":"f","yaw":{"valueOf":1,"toString":1}}'); gun.ws.send('null'); gun.ws.send('[]');
     const odd = await join({ toString: 1 }, 'frost');
     assert.ok(odd.got.find(m => m.t === 'welcome'), 'odd name accepted as default');
     assert.equal(await (await fetch(`http://localhost:${port}/healthz`)).text(), 'ok');
     for (const c of [c1, c2, ...extra, own, gun, odd]) c.ws.close();
-    console.log('ok  server: join, snapshots, roster, status, static files, land choice, paid land and weapon checks, bad messages');
+    console.log('ok  server: join, snapshots, roster, status, static files, land choice, paid land and weapon checks, voice relay, bad messages');
   } finally {
     srv.kill();
     sb.close(); sb.closeAllConnections();

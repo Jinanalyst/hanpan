@@ -4,6 +4,7 @@ import { getMap, isMap, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shar
 import { PHYS, step, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, PRIMARIES, isPrimary } from './shared/weapons.js';
 import { floorPlan } from './floorplan.js';
+import { createVoice } from './voice.js';
 import { Room, cleanName } from './shared/game.js';
 import { configured, currentUser, maybeSignedIn, signOut, accessToken, ownedProducts, walletOf, shortWallet } from './auth.js';
 
@@ -488,6 +489,67 @@ const K = {};
 
 function send(m) { if (net) net.send(m); }
 
+/* ---------------- team voice and chat ---------------- */
+const muted = new Set();   // player ids silenced by me, for voice and chat
+let voiceOn = store.get('hanpan-voice', '1') === '1';
+const voice = createVoice({ sendFrame: f => net?.sendBin?.(f), allowed: id => voiceOn && !muted.has(id) && roster.get(id)?.tm === myTeam });
+let chatOpen = false;
+function chatLine(name, text, cls) {
+  const row = document.createElement('div');
+  row.className = cls || '';
+  if (name) { const b = document.createElement('b'); b.textContent = name + ': '; row.append(b); }
+  row.append(text);
+  const log = $('chatLog');
+  log.append(row);
+  while (log.children.length > 8) log.firstChild.remove();
+  setTimeout(() => row.classList.add('old'), 9000);
+}
+function openChat() {
+  chatOpen = true; trigger = ads = false; voice.stop();
+  for (const k in K) K[k] = false;
+  $('chatBox').classList.add('open'); $('chatRow').hidden = false; $('chatIn').value = ''; $('chatIn').focus();
+}
+function closeChat() { chatOpen = false; $('chatBox').classList.remove('open'); $('chatRow').hidden = true; $('chatIn').blur(); }
+$('chatIn').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.isComposing || e.keyCode === 229) return;   // Enter that only finishes a Hangul syllable
+  if (e.key === 'Enter') { const x = $('chatIn').value.trim(); if (x) send({ t: 'c', x }); closeChat(); e.preventDefault(); }
+  if (e.key === 'Escape') closeChat();
+  if (e.key === 'Tab') e.preventDefault();
+});
+$('chatIn').addEventListener('blur', () => { if (chatOpen) closeChat(); });
+
+let talkHint = 0;
+function talkKey() {
+  if (!net?.sendBin) { if (nowS() - talkHint > 4) { talkHint = nowS(); chatLine('', 'Voice works in online matches.', 'sys'); } return; }
+  if (!voiceOn) { if (nowS() - talkHint > 4) { talkHint = nowS(); chatLine('', 'Team voice is off. Turn it on in the main menu.', 'sys'); } return; }
+  voice.start();
+}
+const MIC = { asking: 'Allow the microphone to talk', denied: 'Microphone blocked. Allow it in the browser address bar', nomic: 'No microphone found', failed: 'Microphone could not start' };
+let talkCache = '';
+function updateTalk() {
+  const ids = voice.speakers().filter(id => allowedSpeaker(id)), key = ids.join();
+  if (key !== talkCache) {
+    talkCache = key;
+    $('talk').replaceChildren(...ids.map(id => { const d = document.createElement('div'); d.textContent = pname(id); return d; }));
+  }
+  const msg = voice.talking ? 'Talking to team' : K.KeyV && voiceOn && net?.sendBin ? MIC[voice.state] || '' : '';
+  $('micBox').hidden = !msg; $('micBox').className = voice.talking ? 'live' : '';
+  if (msg) setText('micBox', msg);
+}
+const allowedSpeaker = id => !muted.has(id) && roster.get(id)?.tm === myTeam;
+function paintMutes() {
+  const mates = [...roster.values()].filter(p => p.tm === myTeam && !p.b && p.id !== myId);
+  $('mutes').hidden = !mates.length;
+  $('mutes').querySelector('ul').replaceChildren(...mates.map(p => {
+    const li = document.createElement('li'), b = document.createElement('button');
+    b.type = 'button'; b.textContent = muted.has(p.id) ? 'Unmute' : 'Mute'; b.setAttribute('aria-label', b.textContent + ' ' + p.n);
+    b.onclick = () => { if (!muted.delete(p.id)) muted.add(p.id); paintMutes(); };
+    li.append(p.n, b);
+    return li;
+  }));
+}
+
 function onMsg(m) {
   switch (m.t) {
     case 'welcome': loadMap(m.map); if (isPrimary(m.lo) && m.lo !== lo) { cur = lo = m.lo; paintLo(); } myId = m.id; myTeam = m.team; buildVM(myTeam); break;
@@ -498,6 +560,8 @@ function onMsg(m) {
       const mine = roster.get(myId);
       if (mine && mine.tm !== myTeam) { myTeam = mine.tm; buildVM(myTeam); }
       if (!$('board').hidden) renderBoard();
+      for (const id of muted) if (!roster.has(id)) muted.delete(id);
+      paintMutes();
       break;
     }
     case 'sh': remoteShot(m); break;
@@ -508,6 +572,8 @@ function onMsg(m) {
     case 'end': showEnd(m); break;
     case 'start': setText('center', ''); break;
     case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
+    case 'c': if (!muted.has(m.id)) chatLine(pname(m.id), String(m.x), m.id === myId ? 'me' : ''); break;
+    case 'cx': chatLine('', 'You are sending messages too fast.', 'sys'); break;
     case 'pi': send({ t: 'po', s: m.s }); break;
   }
 }
@@ -704,6 +770,8 @@ function drawMini() {
 /* ---------------- input ---------------- */
 addEventListener('keydown', e => {
   if (!inGame || document.activeElement?.tagName === 'INPUT') return;
+  if ((e.code === 'Enter' || e.code === 'NumpadEnter') && $('pauseOv').hidden) { e.preventDefault(); openChat(); return; }
+  if (e.code === 'KeyV' && !e.repeat) talkKey();
   K[e.code] = true;
   if (e.code === 'Tab') { e.preventDefault(); renderBoard(); $('board').hidden = false; }
   if (e.code === 'KeyR') send({ t: 'r' });
@@ -711,10 +779,11 @@ addEventListener('keydown', e => {
   if (e.code === 'Digit2' && cur !== 'pistol') { cur = 'pistol'; switchT = nowS(); reloadT = 0; send({ t: 'w', w: 'pistol' }); }
   if (e.code === 'Space') e.preventDefault();
 });
-addEventListener('keyup', e => { K[e.code] = false; if (e.code === 'Tab') $('board').hidden = true; });
-addEventListener('blur', () => { for (const k in K) K[k] = false; trigger = false; ads = false; });
+addEventListener('keyup', e => { K[e.code] = false; if (e.code === 'KeyV') voice.stop(); if (e.code === 'Tab') $('board').hidden = true; });
+addEventListener('blur', () => { for (const k in K) K[k] = false; trigger = false; ads = false; voice.stop(); });
 canvas.addEventListener('mousedown', e => {
   if (!inGame) return;
+  if (chatOpen) { e.preventDefault(); return; }
   if (document.pointerLockElement !== canvas && !lockFailed) { lock(); return; }
   audio();
   if (e.button === 0) { trigger = true; latch = false; }
@@ -738,6 +807,7 @@ function lock() {
 }
 document.addEventListener('pointerlockchange', () => {
   if (!inGame) return;
+  if (document.pointerLockElement !== canvas && chatOpen) closeChat();
   $('pauseOv').hidden = document.pointerLockElement === canvas;
 });
 document.addEventListener('pointerlockerror', () => { lockFailed = true; $('pauseOv').hidden = true; });
@@ -746,6 +816,8 @@ document.addEventListener('pointerlockerror', () => { lockFailed = true; $('paus
 $('nameIn').value = store.get('hanpan-name', 'Recruit' + Math.floor(Math.random() * 900 + 100));
 const sensIn = $('sensIn'); sensIn.value = sens; $('sensOut').textContent = sens.toFixed(1);
 sensIn.oninput = () => { sens = +sensIn.value; $('sensOut').textContent = sens.toFixed(1); store.set('hanpan-sens', sens); };
+$('voiceOn').checked = voiceOn;
+$('voiceOn').onchange = () => { voiceOn = $('voiceOn').checked; store.set('hanpan-voice', voiceOn ? '1' : '0'); };
 let owned = new Set();
 const locked = product => !!product && !owned.has(product);
 for (const id of PRIMARIES) {
@@ -811,10 +883,13 @@ function playerName() { const n = cleanName($('nameIn').value); store.set('hanpa
 
 function enterGame() {
   inGame = true; $('menu').hidden = true; $('hud').hidden = false; status('');
+  muted.clear(); $('chatLog').textContent = ''; if (document.activeElement) document.activeElement.blur();
+  chatLine('', voiceOn && net?.sendBin ? 'Hold V to talk to your team. Enter for team chat.' : 'Press Enter for team chat.', 'sys');
   snaps = []; offEst = null; cur = lo; wasAlive = true; deathAt = null;
   for (const [, o] of others) scene.remove(o.g); others.clear();
 }
 function leaveGame(msg = '') {
+  voice.close(); closeChat();
   if (net) { const n = net; net = null; n.close(); }
   inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
@@ -842,7 +917,7 @@ function needsStore() {
 let connecting = false;
 $('online').onclick = async () => {
   if (connecting || needsStore()) return;
-  audio(); lock();
+  audio(); lock(); voice.ready();
   if (!/^https?:$/.test(location.protocol)) { status('Open this page from the game server to play online.'); return; }
   status('Connecting…');
   connecting = true;
@@ -856,10 +931,11 @@ $('online').onclick = async () => {
   ws.onopen = () => {
     opened = true; clearTimeout(to);
     ws.send(JSON.stringify({ t: 'join', name: playerName(), lo, map: land, token: token || undefined }));
-    net = mine = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, close: () => ws.close() };
+    net = mine = { send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, sendBin: b => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(b); }, close: () => ws.close() };
     enterGame();
   };
-  ws.onmessage = e => { if (net !== mine) return; let m; try { m = JSON.parse(e.data); } catch { return; } onMsg(m); };
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = e => { if (net !== mine) return; if (typeof e.data !== 'string') { voice.receive(e.data); return; } let m; try { m = JSON.parse(e.data); } catch { return; } onMsg(m); };
   ws.onclose = () => { if (inGame && mine && net === mine) leaveGame('Disconnected from the server.'); };
   ws.onerror = () => {};
 };
@@ -883,6 +959,7 @@ function frame() {
     updateLocal(dt, t);
     interpRemotes(dt);
     updateHud(dt, t);
+    updateTalk();
     drawMini();
   } else {
     menuA += dt * 0.05;
