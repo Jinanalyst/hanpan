@@ -22,7 +22,7 @@ const locked = product => !!product && !owned.has(product);
 const LOAD = {
   lo: { name: 'Primary', view: 'gun', ids: PRIMARIES, of: id => WEAPONS[id], note: 'Every weapon is free to try in Practice. Locked ones need the Store to be used online.' },
   sa: { name: 'Sidearm', view: 'gun', ids: SIDEARMS, of: id => WEAPONS[id], note: 'Press 2 in a match to draw it.' },
-  eq: { name: 'Equipment', view: 'full', ids: Object.keys(EQUIP), of: id => EQUIP[id], note: 'Press G in a match to use it.' },
+  eq: { name: 'Equipment', view: 'full', ids: Object.keys(EQUIP), of: id => EQUIP[id], note: 'In a match, hold G to aim and release to throw. The med kit works with one press.' },
 };
 const GROUPS = [['Weapons', ['lo', 'sa', 'eq', 'finish']], ['Head', ['helmet', 'face', 'skin']], ['Body', ['camo', 'vest', 'pack', 'gloves', 'boots', 'extra']]];
 const slotName = s => (LOAD[s] || GEAR[s]).name;
@@ -71,7 +71,7 @@ function frame(now) {
     const u = body.userData, b = calm ? 0 : Math.sin(now / 900);
     body.rotation.y = turn;
     u.torso.scale.y = 1 + b * 0.004; u.aim.rotation.x = -0.12 + b * 0.012; u.head.rotation.y = calm ? 0 : Math.sin(now / 2300) * 0.07;
-    u.legs[0].rotation.x = 0.1; u.legs[1].rotation.x = -0.12; u.legs[1].userData.knee.rotation.x = 0.06;
+    u.legs[0].rotation.x = 0.1; u.legs[1].rotation.x = -0.12; u.legs[1].userData.knee.rotation.x = -0.06;
   }
   R.render(scene, cam);
 }

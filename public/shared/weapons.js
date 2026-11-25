@@ -72,6 +72,9 @@ export const WEAPONS = {
 export const EQUIP = {
   frag: { name: 'Frag grenade', desc: 'Two per life. Bounces, then explodes. Walls give cover.', n: 2, fuse: 2.2, thrown: true, radius: 7, full: 2, dmg: 110 },
   smoke: { name: 'Smoke grenade', desc: 'Two per life. Hides an area for 12 seconds, from bots too.', n: 2, fuse: 1.6, thrown: true, radius: 3.4, lasts: 12 },
+  flash: { name: 'Flash bomb', desc: 'Two per life. Blinds enemies who can see it. Look away!', n: 2, fuse: 1.4, thrown: true, radius: 16, blind: 2.8 },
+  fire: { name: 'Fire bomb', desc: 'One per life. Bursts where it lands and burns for 7 seconds.', n: 1, fuse: 4, thrown: true, impact: true, speed: 13, radius: 3, burns: 7, tick: 9 },
+  charge: { name: 'Remote charge', desc: 'Two per life. Sticks where it lands. Press G again to blow it. Can be shot.', n: 2, fuse: 60, thrown: true, sticky: true, speed: 9, radius: 6, full: 1.8, dmg: 110 },
   med: { name: 'Med kit', desc: 'One per life. Restores 60 health over 2 seconds.', n: 1, heal: 60, over: 2 },
 };
 

@@ -12,9 +12,22 @@ export const PHYS = {
   walk: 5,
   sprint: 7,
   crouch: 2.4,
+  hp: 0.6,        // lying height
+  eyep: 0.42,
+  prone: 1.3,
+  slide: 8.5,
   ads: 3,
   step: 0.5,      // auto step-up height
 };
+
+// Stance: 0 standing, 1 kneeling, 2 lying down.
+export const stanceH = cr => (cr === 2 ? PHYS.hp : cr ? PHYS.hc : PHYS.h);
+export const stanceEye = cr => (cr === 2 ? PHYS.eyep : cr ? PHYS.eyec : PHYS.eye);
+// The tallest stance that fits here, starting from the wanted one.
+export function fitStance(p, want, boxes) {
+  for (let c = want; c < 2; c++) if (c >= (p.cr | 0) || !hits(p.x, p.y + 0.002, p.z, stanceH(c), boxes)) return c;
+  return 2;
+}
 
 function overlaps(x, y, z, h, b) {
   return x + PHYS.r > b.min[0] && x - PHYS.r < b.max[0] &&
@@ -44,7 +57,7 @@ function moveAxis(p, axis, d, h, boxes) {
 
 // p: {x,y,z,vx,vy,vz,ground,cr}; (ix,iz) is the wished direction in world space (length <= 1)
 export function step(p, ix, iz, speed, dt, boxes) {
-  const h = p.cr ? PHYS.hc : PHYS.h;
+  const h = stanceH(p.cr);
   const k = p.ground ? Math.min(1, dt * 12) : Math.min(1, dt * 2.5);
   p.vx += (ix * speed - p.vx) * k;
   p.vz += (iz * speed - p.vz) * k;
@@ -104,17 +117,26 @@ const nadeHit = (x, y, z, boxes) => {
   }
   return false;
 };
+// Where a throw starts, rounded like the message that tells the clients about it.
+export function nadeStart(p, yaw, pitch, E) {
+  const d = dirFrom(yaw, pitch), v = E.speed || 15, R = x => Math.round(x * 100) / 100;
+  return { x: R(p.x), y: R(p.y + Math.max(0.3, stanceEye(p.cr) - 0.1)), z: R(p.z), vx: R(d[0] * v), vy: R(d[1] * v + v / 6), vz: R(d[2] * v) };
+}
+// Returns true when it touched something.
 export function stepNade(n, dt, boxes) {
+  let touched = false;
   n.vy -= 14 * dt;
   for (const [k, v] of [['x', 'vx'], ['z', 'vz'], ['y', 'vy']]) {
     const old = n[k];
     n[k] += n[v] * dt;
     const floor = k === 'y' && n.y < NADE_R;
     if (!floor && !nadeHit(n.x, n.y, n.z, boxes)) continue;
+    touched = true;
     n[k] = floor ? NADE_R : old;
     if (k === 'y' && n.vy < 0) { n.vx *= 0.75; n.vz *= 0.75; }
     n[v] *= Math.abs(n[v]) < 0.8 ? 0 : -0.45;
   }
+  return touched;
 }
 
 export const dirFrom = (yaw, pitch) => [
@@ -123,8 +145,17 @@ export const dirFrom = (yaw, pitch) => [
   -Math.cos(yaw) * Math.cos(pitch),
 ];
 
-// Head + body hitboxes for a player standing at s = {x,y,z,cr}
+// Head + body hitboxes for a player at s = {x,y,z,yaw,cr}. A lying body stretches along its yaw.
+const LYING = [[0.36, 0.24], [-0.15, 0.24], [-0.6, 0.22]];   // [metres forward, half width] of chest, hips, legs
 export function hitbox(o, d, s) {
+  if (s.cr === 2) {
+    const fx = -Math.sin(s.yaw || 0), fz = -Math.cos(s.yaw || 0);
+    const at = (f, w, y0, y1) => rayBox(o, d, [s.x + fx * f - w, s.y + y0, s.z + fz * f - w], [s.x + fx * f + w, s.y + y1, s.z + fz * f + w]);
+    const head = at(0.82, 0.17, 0.08, 0.5);
+    let body = Infinity;
+    for (const [f, w] of LYING) body = Math.min(body, at(f, w, 0, 0.42));
+    return head <= body ? { t: head, head: head < Infinity } : { t: body, head: false };
+  }
   const h = s.cr ? PHYS.hc : PHYS.h;
   const head = rayBox(o, d, [s.x - 0.17, s.y + h - 0.32, s.z - 0.17], [s.x + 0.17, s.y + h + 0.02, s.z + 0.17]);
   const body = rayBox(o, d, [s.x - 0.3, s.y, s.z - 0.3], [s.x + 0.3, s.y + h - 0.32, s.z + 0.3]);

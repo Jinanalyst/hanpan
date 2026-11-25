@@ -21,13 +21,15 @@
   <div id="dmgdir"></div>
   <div id="vign"></div>
   <div id="scope"></div>
-  <div id="hpbox"><span id="hpN">100</span><div class="bar"><i id="hpB"></i></div></div>
+  <div id="hpbox"><span id="hpN">100</span><div class="bar"><i id="hpB"></i></div><div id="stance"></div></div>
   <div id="ammobox"><div id="wName">Carbine</div><div class="ammo"><b id="ammoN">30</b><span id="resN">/ 150</span></div><div class="bar"><i id="rlB"></i></div><div id="eqN"></div></div>
   <div id="net"></div>
   <div id="talk"></div>
   <div id="chatBox"><div id="chatLog" role="log" aria-label="Team chat"></div><div id="chatRow" hidden><span>Team</span><input id="chatIn" type="text" maxlength="120" autocomplete="off" aria-label="Message to your team"></div></div>
   <div id="micBox" hidden></div>
-  <div id="nadeWarn" hidden>Grenade!</div>
+  <div id="nadeWarn" hidden>Danger! Move!</div>
+  <div id="aimHint"></div>
+  <div id="blind"></div>
   <div id="center"></div>
   <div id="board" hidden></div>
 </div>
@@ -50,14 +52,16 @@
     </div>
     <div class="landHead"><span class="lbl" id="landLbl">Land</span><div class="kitSeg" id="landTabs" role="group" aria-label="Kind of land"><button type="button" data-tab="city">Cities</button><button type="button" data-tab="field">Battlegrounds</button></div></div>
     <div class="lands" id="landSeg" role="group" aria-labelledby="landLbl"></div>
+    <label class="check"><input id="holdKneel" type="checkbox"> Hold C to kneel (off: press once)</label>
     <label class="check"><input id="voiceOn" type="checkbox"> Team voice (hold V to talk)</label>
     <label for="sensIn">Mouse sensitivity <output id="sensOut"></output></label>
     <input id="sensIn" type="range" min="0.5" max="3" step="0.1">
     <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button><p id="status" role="status"></p></div>
     <details><summary>Controls</summary>
-      <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Space</b> jump</li>
+      <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>Space</b> jump or stand up</li>
+      <li><b>C</b> kneel · <b>X</b> lie down · <b>Shift + C</b> while running: slide</li>
       <li><b>Left click</b> fire · <b>Right click</b> aim down sights · <b>R</b> reload</li>
-      <li><b>1 / 2</b> primary / sidearm · <b>G</b> grenade or med kit · <b>Tab</b> scoreboard · <b>Esc</b> pause</li>
+      <li><b>1 / 2</b> primary / sidearm · hold <b>G</b> to aim a bomb, release to throw, right click to cancel · <b>Tab</b> scoreboard · <b>Esc</b> pause</li>
       <li>Hold <b>V</b> to talk to your team · <b>Enter</b> team chat</li></ul>
       <p class="small">Desktop with mouse and keyboard.</p>
     </details>

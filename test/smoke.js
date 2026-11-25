@@ -8,7 +8,7 @@ import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
 import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
 import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
-import { hits, PHYS } from '../public/shared/physics.js';
+import { hits, hitbox, rayMap, stanceH, fitStance, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -260,7 +260,75 @@ for (const id of MAP_IDS) {
   console.log('ok  equipment: frag, cover, own team, own grenade, limits, smoke, med kit');
 }
 
-// 8) Real server: two clients join, receive snapshots, see each other in the roster
+// 8) Stances and the newer bombs
+{
+  const realNow = performance.now.bind(performance);
+  let fake = realNow();
+  performance.now = () => fake;
+  const run = (room, sec) => { for (let i = 0; i < sec * 30; i++) { fake += 1000 / 30; room.update(1 / 30); } };
+  const make = (n, eq) => { const room = new Room({ minPlayers: 0 }), P = []; for (let i = 0; i < n; i++) { const p = { got: [] }; p.s = room.players.get(room.addPlayer('P' + i, 'rifle', m => p.got.push(m), undefined, null, { eq })); P.push(p); } return { room, P }; };
+  const put = (p, x, z, yaw = 0) => Object.assign(p.s, { x, y: 0, z, yaw, pitch: 0, cr: 0, crT: 0, prot: 0 });
+  const tell = (room, p, o) => { fake += 200; room.onMessage(p.s.id, { t: 'in', sp: p.s.sp, x: p.s.x, y: p.s.y, z: p.s.z, yaw: p.s.yaw, pitch: 0, cr: 0, ...o }); };
+  // hit areas: a level shot at standing eye height misses someone lying or kneeling; lying bodies stretch along their yaw
+  const ray = (o, d, q) => hitbox(o, d, { x: 0, y: 0, z: 0, yaw: 0, ...q });
+  assert.ok(ray([0, 1.6, 10], [0, 0, -1], { cr: 0 }).head); assert.equal(ray([0, 1.6, 10], [0, 0, -1], { cr: 1 }).t, Infinity); assert.equal(ray([0, 0.9, 10], [0, 0, -1], { cr: 2 }).t, Infinity);
+  assert.ok(ray([0, 0.3, -10], [0, 0, 1], { cr: 2 }).head, 'lying head points forward');
+  assert.ok(ray([5, 0.2, 0.6], [-1, 0, 0], { cr: 2 }).t < 6 && !ray([5, 0.2, 0.6], [-1, 0, 0], { cr: 2 }).head, 'legs lie behind');
+  assert.equal(ray([5, 0.2, 0.6], [-1, 0, 0], { cr: 2, yaw: Math.PI / 2 }).t, Infinity, 'and turn with the body');
+  // the server takes three stances and stops flickering
+  const st = make(2, 'frag'), [A, B] = st.P; put(A, 0, 34); put(B, 0, 26, 0);
+  tell(st.room, A, { cr: 2 }); assert.equal(A.s.cr, 2); tell(st.room, A, { cr: 1 }); assert.equal(A.s.cr, 1);
+  st.room.onMessage(A.s.id, { t: 'in', sp: A.s.sp, x: 0, y: 0, z: 34, yaw: 0, pitch: 0, cr: 0 }); assert.equal(A.s.cr, 1, 'too soon');
+  for (const bad of [7, 'x', {}, true]) { tell(st.room, A, { cr: bad }); assert.equal(A.s.cr, 1); }
+  tell(st.room, A, {}); assert.equal(A.s.cr, 0);
+  A.s.next = 0; B.s.hp = 100; tell(st.room, B, { cr: 2 }); run(st.room, 0.5);
+  st.room.fire(A.s, 0, 0); assert.equal(B.s.hp, 100, 'over the head'); A.s.next = 0;
+  st.room.fire(A.s, 0, Math.atan2(0.25 - 1.6, 8)); assert.ok(B.s.hp < 100, 'aimed down it hits');
+  const snap = A.got.filter(m => m.t === 's').at(-1); assert.equal(snap.ps.find(x => x[0] === B.s.id)[6], 2, 'everyone sees the stance');
+  // standing up needs room
+  const roof = [{ min: [-2, 1, -2], max: [2, 1.4, 2] }];
+  assert.equal(fitStance({ x: 0, y: 0, z: 0, cr: 2 }, 0, roof), 2); assert.equal(fitStance({ x: 0, y: 0, z: 0, cr: 2 }, 0, []), 0); assert.equal(fitStance({ x: 0, y: 0, z: 0, cr: 0 }, 2, roof), 2);
+  assert.ok(stanceH(0) > stanceH(1) && stanceH(1) > stanceH(2));
+
+  const throwAt = (room, p, x, y, z) => { room.onMessage(p.s.id, { t: 'g', yaw: 0, pitch: 0 }); const n = room.nades.at(-1); Object.assign(n, { x, y, z, vx: 0, vy: 0, vz: 0 }); return n; };
+  // flash: only those who can see it, stronger when looking at it, never your team
+  { const { room, P: [a, b, c, d] } = make(4, 'flash'); put(a, 0, 37, Math.PI); put(b, 0, 24, Math.PI); put(c, 1, 24, Math.PI); put(d, 0, 24.5, 0);   // b looks at +z, d looks away
+    throwAt(room, a, 0, 0.5, 28); run(room, 1.5);
+    const blind = p => p.got.find(m => m.t === 'fl')?.s || 0;
+    assert.ok(blind(b) > 1.3 && blind(d) > 0 && blind(d) < blind(b) * 0.6, 'facing it is worse'); assert.equal(blind(c), 0, 'teammates are safe'); assert.equal(b.s.hp, 100); }
+  { const { room, P: [a, b] } = make(2, 'flash'); put(a, 4, 2); put(b, 4, -9, Math.PI); throwAt(room, a, 4, 0.5, -3); run(room, 1.5); assert.ok(!b.got.some(m => m.t === 'fl'), 'walls block it'); }
+  // fire: bursts on contact, burns only inside, stops, and late joiners see it
+  { const { room, P: [a, b, c, d] } = make(4, 'fire'); put(a, 0, 36); put(b, 0, 28); put(c, 0.5, 27); put(d, 0, 10);
+    throwAt(room, a, 0, 1.2, 27); run(room, 0.8);
+    assert.equal(room.fires.length, 1); assert.ok(Math.abs(room.fires[0].y) < 0.05, 'on the floor');
+    run(room, 2); assert.ok(b.s.hp < 80 && b.s.hp > 20, 'burns over time: ' + b.s.hp); assert.equal(c.s.hp, 100); assert.equal(d.s.hp, 100); assert.equal(a.s.hp, 100);
+    const late = []; room.addPlayer('Late', 'rifle', m => late.push(m)); assert.ok(late.some(m => m.t === 'gx' && m.w === 'fire' && m.d > 3));
+    b.s.hp = 10; run(room, 1.1); assert.ok(!b.s.alive && a.s.k === 1); assert.ok(a.got.some(m => m.t === 'k' && m.w === 'fire'));
+    run(room, 5); assert.equal(room.fires.length, 0, 'burns out'); }
+  // charge: sticks, blows on the second press, can be shot, dies with its owner
+  { const { room, P: [a, b] } = make(2, 'charge'); put(a, 0, 36); put(b, 0, 25);
+    const n = throwAt(room, a, 0, 0.4, 27); run(room, 1); assert.ok(n.stuck && b.got.some(m => m.t === 'gs'));
+    const at = [n.x, n.y, n.z]; run(room, 3); assert.deepEqual([n.x, n.y, n.z], at, 'stays put'); assert.equal(b.s.hp, 100); assert.equal(a.s.eqN, 1);
+    room.onMessage(a.s.id, { t: 'g' }); assert.ok(b.s.hp < 100 || !b.s.alive, 'blown'); assert.equal(room.nades.length, 0); assert.equal(a.s.eqN, 1, 'blowing costs nothing');
+    room.spawn(b.s); put(b, 0, 31); run(room, 2.2); put(b, 0, 31); const m = throwAt(room, a, 0, 0.4, 27); run(room, 1); assert.ok(m.stuck);
+    b.s.next = 0; b.s.yaw = 0; b.s.prot = 0; room.fire(b.s, 0, Math.atan2(m.y - 1.6, 4)); assert.equal(room.nades.length, 0, 'shot'); assert.ok(b.got.some(x => x.t === 'gx' && x.w === 'fizz')); }
+  { const { room, P: [a, b] } = make(2, 'charge'); put(a, 0, 36); put(b, 0, 25); throwAt(room, a, 0, 0.4, 27); run(room, 1);
+    room.onMessage(b.s.id, { t: 'g' }); assert.ok(!room.nades[0] || room.nades[0].by === a.s.id, 'others cannot blow it'); room.nades = room.nades.filter(x => x.by === a.s.id);
+    room.kill(a.s, b.s, false); assert.equal(room.nades.length, 0, 'gone with its owner');
+    throwAt(room, b, 0, 0.4, 10); run(room, 1); room.removePlayer(b.s.id); assert.equal(room.nades.length, 0); run(room, 1); }
+  // resets clean everything
+  { const { room, P: [a, b] } = make(2, 'fire'); put(a, 0, 34); put(b, 0, 10); throwAt(room, a, 0, 0.5, 20); run(room, 1); room.endMatch(); assert.equal(room.fires.length + room.nades.length, 0); }
+  // bots throw, kneel and stay blind while dazzled
+  { const room = new Room({ minPlayers: 8 }); room.addPlayer('W', 'rifle', () => {}); const W = room.players.get(1); Object.assign(W, { x: 39, z: 0 });
+    let thrown = 0, knelt = 0; const old = room.useEquip.bind(room); room.useEquip = (p, y, q) => { const n = p.eqN; old(p, y, q); if (p.bot && p.eqN < n) thrown++; };
+    for (let i = 0; i < 30 * 240; i++) { fake += 1000 / 30; room.update(1 / 30); W.prot = 99; W.hp = 100; for (const p of room.players.values()) if (p.bot && p.cr === 1) knelt++; }
+    assert.ok(thrown > 2 && knelt > 30, `bots threw ${thrown} and knelt ${knelt} ticks`);
+    const b = [...room.players.values()].find(p => p.bot && p.alive); if (b) { b.ai.blind = 2; b.ai.target = 1; room.bot(b, 1 / 30); assert.equal(b.ai.target, 0); } }
+  performance.now = realNow;
+  console.log('ok  stances, flash, fire, remote charge, bots kneel and throw');
+}
+
+// 9) Real server: two clients join, receive snapshots, see each other in the roster
 {
   const port = 3999;
   const sb = http.createServer((q, r) => { const ok = q.headers.authorization === 'Bearer a.b.owner'; r.writeHead(ok ? 200 : 401); r.end(ok ? '[{"product_id":"land:palace"},{"product_id":"weapon:dmr"}]' : '{}'); }).listen(3998);

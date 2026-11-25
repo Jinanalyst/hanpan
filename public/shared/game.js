@@ -1,7 +1,7 @@
 // Authoritative match logic. Isomorphic: the Node server runs it for online play,
 // the browser runs the same code for offline practice.
 import { getMap, randomRoute } from './map.js';
-import { PHYS, NADE_DT, step, stepNade, rayMap, dirFrom, hits, hitbox } from './physics.js';
+import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS, EQUIP, SIDEARMS, isPrimary, isSidearm, isEquip, damageAt } from './weapons.js';
 import { packGear, unpackGear, randomGear } from './gear.js';
 import { PACKET } from './adpcm.js';
@@ -45,6 +45,7 @@ export class Room {
     this.nadeSeq = 1;
     this.nades = [];    // grenades in the air
     this.smokes = [];   // { x, y, z, until }
+    this.fires = [];    // { x, y, z, until, by, team, next }
   }
 
   humanCount() { let n = 0; for (const p of this.players.values()) if (!p.bot) n++; return n; }
@@ -67,11 +68,11 @@ export class Room {
     const p = {
       id, name: bot ? name : cleanName(name), team, bot, send: send || (() => {}), owned: bot ? 'all' : owned,
       lo: 'rifle', sa: 'pistol', eq: 'frag', eqN: 0, eqNext: 0, healT: 0, want: null, gear: packGear(unpackGear(kit.gear)), k: 0, d: 0,
-      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0,
+      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, crT: 0, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
       sendBin: null, chatN: CHAT_BURST, chatAt: now(), voiceN: VOICE_PER_SEC, voiceAt: now(),
-      ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05) } : null,
+      ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05), kneel: false, blind: 0, bombT: rnd(6, 16) } : null,
     };
     this.setLoadout(p, { lo, sa: kit.sa, eq: kit.eq });
     this.players.set(id, p);
@@ -84,7 +85,8 @@ export class Room {
     this.spawn(p);
     p.send({ t: 'welcome', id: p.id, team: p.team, room: this.id, map: this.map.id, lo: p.lo, limit: this.killLimit });
     const t = now();
-    for (const s of this.smokes) if (s.until > t) p.send({ t: 'gx', id: 0, w: 'smoke', p: [s.x, s.y, s.z].map(r2), d: r2(s.until - t) });
+    for (const [w, list] of [['smoke', this.smokes], ['fire', this.fires]]) for (const s of list) if (s.until > t) p.send({ t: 'gx', id: 0, w, p: [s.x, s.y, s.z].map(r2), d: r2(s.until - t) });
+    for (const n of this.nades) if (n.stuck) p.send({ t: 'gt', id: n.id, w: n.w, by: n.by, tm: n.team, o: [n.x, n.y, n.z].map(r2), v: [0, 0, 0], st: 1 });
     this.balanceBots();
     this.roster();
     return p.id;
@@ -92,6 +94,7 @@ export class Room {
 
   removePlayer(id) {
     if (!this.players.delete(id)) return;
+    for (const n of [...this.nades]) if (n.by === id) { this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); }
     this.balanceBots();
     this.roster();
   }
@@ -108,7 +111,7 @@ export class Room {
     }
     while (bots.length < want) {
       const b = this.newPlayer(BOT_NAMES[this.botSeq++ % BOT_NAMES.length], ['rifle', 'rifle', 'rifle', 'battle', 'bullpup', 'sniper'][Math.random() * 6 | 0], true, null, undefined,
-        { sa: SIDEARMS[Math.random() * SIDEARMS.length | 0], gear: packGear({ ...randomGear(), camo: 'team' }) });
+        { eq: ['frag', 'frag', 'frag', 'frag', 'smoke', 'fire', 'fire', 'flash'][Math.random() * 8 | 0], sa: SIDEARMS[Math.random() * SIDEARMS.length | 0], gear: packGear({ ...randomGear(), camo: 'team' }) });
       this.spawn(b);
       bots.push(b);
     }
@@ -134,7 +137,7 @@ export class Room {
     }
     Object.assign(p, p.want);
     Object.assign(p, {
-      x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, cr: false, ground: true,
+      x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, cr: 0, crT: 0, ground: true,
       yaw: p.team === 'red' ? Math.PI : 0, pitch: 0, hp: 100, alive: true, prot: PROTECT,
       w: p.lo, rlT: 0, next: 0, hist: [], eqN: EQUIP[p.eq].n, eqNext: 0, healT: 0,
     });
@@ -159,7 +162,8 @@ export class Room {
         const dt = Math.max(0.1, t - p.lastIn);
         p.lastIn = t;
         const max = PHYS.sprint * 1.5 * dt + 0.75;
-        if (Math.hypot(x - p.x, z - p.z) > max || y < -0.1 || y > 12 || hits(x, y + 0.05, z, PHYS.hc - 0.1, this.map.boxes)) {
+        const cr = m.cr === 2 ? 2 : m.cr ? 1 : 0;
+        if (Math.hypot(x - p.x, z - p.z) > max || y < -0.1 || y > 12 || hits(x, y + 0.05, z, (cr === 2 ? PHYS.hp : PHYS.hc) - 0.1, this.map.boxes)) {
           p.sp++;
           p.send({ t: 'tp', x: p.x, y: p.y, z: p.z, yaw: p.yaw, sp: p.sp });
           return;
@@ -167,7 +171,7 @@ export class Room {
         p.x = x; p.y = y; p.z = z;
         p.yaw = wrapA(+m.yaw || 0);
         p.pitch = clampN(+m.pitch || 0, -1.5, 1.5);
-        p.cr = !!m.cr;
+        if (cr !== p.cr && t - p.crT > 0.15) { p.cr = cr; p.crT = t; }   // no flickering between stances to dodge shots
         break;
       }
       case 'f': this.fire(p, +m.yaw, +m.pitch); break;
@@ -221,7 +225,7 @@ export class Room {
     p.mag[p.w]--;
     p.next = t + W.rate * 0.9;
     p.prot = 0;
-    const o = [p.x, p.y + (p.cr ? PHYS.eyec : PHYS.eye), p.z];
+    const o = [p.x, p.y + stanceEye(p.cr), p.z];
     // lag compensation: test targets where the shooter saw them
     const rt = t - (p.bot ? 0 : Math.min(0.3, p.ping / 2 + 0.1));
     const targets = [];
@@ -234,6 +238,11 @@ export class Room {
       for (const [q, at] of targets) {
         const h = hitbox(o, d, at);
         if (h.t < bt) { bt = h.t; best = q; head = h.head; }
+      }
+      for (const n of this.nades) {                       // enemy charges can be shot
+        if (!n.stuck || n.team === p.team) continue;
+        const h = rayBox(o, d, [n.x - 0.16, n.y - 0.12, n.z - 0.16], [n.x + 0.16, n.y + 0.16, n.z + 0.16]);
+        if (h < bt + 0.2) { bt = h; best = null; this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); break; }
       }
       ends.push([o[0] + d[0] * bt, o[1] + d[1] * bt, o[2] + d[2] * bt].map(r2));
       if (!best) continue;
@@ -250,7 +259,15 @@ export class Room {
   // ---- equipment ----
   useEquip(p, yaw, pitch) {
     const t = now(), E = EQUIP[p.eq];
-    if (!p.alive || this.phase !== 'play' || p.eqN <= 0 || t < p.eqNext) return;
+    if (!p.alive || this.phase !== 'play' || t < p.eqNext) return;
+    const set = E.sticky && this.nades.find(n => n.by === p.id && n.w === p.eq);
+    if (set) {                             // a second press blows the charge
+      if (!set.stuck) return;
+      this.burst(set, t);
+      p.eqNext = t + 0.6;
+      return;
+    }
+    if (p.eqN <= 0) return;
     if (E.heal) {
       if (p.hp >= 100 || p.healT > 0) return;
       p.healT = E.over;
@@ -258,10 +275,7 @@ export class Room {
     } else {
       if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return;
       if (Math.abs(wrapA(yaw - p.yaw)) > 0.35) yaw = p.yaw;
-      const d = dirFrom(yaw, clampN(pitch, -1.5, 1.5));
-      const n = { id: this.nadeSeq++, w: p.eq, by: p.id, team: p.team, fuse: E.fuse, acc: 0,
-        x: p.x, y: p.y + (p.cr ? PHYS.eyec : PHYS.eye) - 0.1, z: p.z, vx: d[0] * 15, vy: d[1] * 15 + 2.5, vz: d[2] * 15 };
-      for (const k of ['x', 'y', 'z', 'vx', 'vy', 'vz']) n[k] = r2(n[k]);   // start from exactly what clients are told
+      const n = { id: this.nadeSeq++, w: p.eq, by: p.id, team: p.team, fuse: E.fuse, acc: 0, stuck: false, ...nadeStart(p, yaw, clampN(pitch, -1.5, 1.5), E) };
       this.nades.push(n);
       this.broadcast({ t: 'gt', id: n.id, w: n.w, by: p.id, tm: n.team, o: [n.x, n.y, n.z], v: [n.vx, n.vy, n.vz] });
     }
@@ -275,28 +289,80 @@ export class Room {
   updateNades(dt, t) {
     if (this.smokes.length) this.smokes = this.smokes.filter(s => s.until > t);
     for (const n of [...this.nades]) {
-      for (n.acc += dt; n.acc >= NADE_DT; n.acc -= NADE_DT) stepNade(n, NADE_DT, this.map.boxes);
-      if ((n.fuse -= dt) > 0) continue;
-      const at = this.nades.indexOf(n);
-      if (at < 0) continue;                // the match ended in this very tick
-      this.nades.splice(at, 1);
-      const E = EQUIP[n.w], msg = { t: 'gx', id: n.id, w: n.w, p: [n.x, n.y, n.z].map(r2) };
-      if (E.lasts) { msg.d = E.lasts; this.smokes.push({ x: n.x, y: n.y, z: n.z, until: t + E.lasts }); }
-      this.broadcast(msg);
-      if (E.dmg) this.explode(n, E);
+      const E = EQUIP[n.w];
+      for (n.acc += dt; n.acc >= NADE_DT && !n.stuck; n.acc -= NADE_DT) {
+        if (!stepNade(n, NADE_DT, this.map.boxes)) continue;
+        if (E.impact) n.fuse = 0;
+        if (E.sticky) { n.stuck = true; n.vx = n.vy = n.vz = 0; this.broadcast({ t: 'gs', id: n.id, p: [n.x, n.y, n.z].map(r2) }); }
+      }
+      if ((n.fuse -= dt) <= 0) this.burst(n, t);
+    }
+    for (const f of [...this.fires]) {
+      if (t >= f.until) { this.fires.splice(this.fires.indexOf(f), 1); continue; }
+      if (t >= f.next) { f.next = t + 0.5; this.burn(f); }
+    }
+  }
+
+  dropNade(n) {
+    const at = this.nades.indexOf(n);
+    if (at >= 0) this.nades.splice(at, 1);
+    return at >= 0;
+  }
+
+  burst(n, t) {
+    if (!this.dropNade(n)) return;         // the match ended in this very tick
+    const E = EQUIP[n.w];
+    if (E.burns) n.y = Math.max(0, n.y - rayMap([n.x, n.y, n.z], [0, -1, 0], this.map.boxes, 50));   // fire falls to the floor
+    const msg = { t: 'gx', id: n.id, w: n.w, p: [n.x, n.y, n.z].map(r2) };
+    if (E.lasts) { msg.d = E.lasts; this.smokes.push({ x: n.x, y: n.y, z: n.z, until: t + E.lasts }); }
+    if (E.burns) { msg.d = E.burns; this.fires.push({ x: n.x, y: n.y, z: n.z, until: t + E.burns, by: n.by, team: n.team, next: t + 0.25 }); }
+    this.broadcast(msg);
+    if (E.dmg) this.explode(n, E);
+    if (E.blind) this.dazzle(n, E);
+  }
+
+  // Everyone a bomb thrown by p's team may touch: the other team and the thrower.
+  *victims(n) {
+    for (const q of [...this.players.values()]) if (q.alive && (q.team !== n.team || q.id === n.by)) yield q;
+  }
+
+  clear(a, b) {                            // nothing solid between two points
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L = Math.hypot(...d) || 0.01;
+    return rayMap(a, d.map(v => v / L), this.map.boxes, L) >= L - 0.1;
+  }
+
+  burn(f) {
+    const p = this.players.get(f.by);
+    if (!p) { f.until = 0; return; }
+    for (const q of this.victims(f)) {
+      if (this.phase !== 'play') return;
+      const dy = q.y - f.y;
+      if (dy < -0.6 || dy > 1.6 || Math.hypot(q.x - f.x, q.z - f.z) > EQUIP.fire.radius) continue;
+      if (this.clear([f.x, f.y + 0.35, f.z], [q.x, q.y + 0.4, q.z])) this.damage(p, q, EQUIP.fire.tick, false, 'fire', [f.x, f.z]);
+    }
+  }
+
+  dazzle(n, E) {
+    for (const q of this.victims(n)) {
+      if (q.prot > 0) continue;
+      const eye = [q.x, q.y + stanceEye(q.cr), q.z], d = [n.x - eye[0], n.y + 0.2 - eye[1], n.z - eye[2]], L = Math.hypot(...d) || 0.01;
+      if (L > E.radius || !this.clear(eye, [n.x, n.y + 0.2, n.z])) continue;
+      const look = dirFrom(q.yaw, q.pitch), dot = (look[0] * d[0] + look[1] * d[1] + look[2] * d[2]) / L;
+      const sec = E.blind * (1 - L / E.radius * 0.7) * (dot > 0.35 ? 1 : dot > -0.2 ? 0.6 : 0.25);
+      q.send({ t: 'fl', s: r2(sec) });
+      if (q.ai) { q.ai.blind = sec + 0.4; q.ai.target = 0; }
     }
   }
 
   explode(n, E) {
     const p = this.players.get(n.by), o = [n.x, n.y + 0.15, n.z];
     if (!p) return;                        // the thrower left
-    for (const q of [...this.players.values()]) {
+    for (const q of this.victims(n)) {       // your own bomb can hurt you, not your team
       if (this.phase !== 'play') return;
-      if (!q.alive || (q.team === n.team && q !== p)) continue;   // your own grenade can hurt you, not your team
       let near = Infinity;
-      for (const h of q.cr ? [0.3, 0.9] : [0.3, 0.9, 1.5]) {
-        const d = [q.x - o[0], q.y + h - o[1], q.z - o[2]], L = Math.hypot(...d) || 0.01;
-        if (L < near && L < E.radius && rayMap(o, d.map(v => v / L), this.map.boxes, L) >= L - 0.1) near = L;
+      for (const h of [0.3, 0.9, 1.5].slice(0, 3 - q.cr)) {
+        const at = [q.x, q.y + h, q.z], L = Math.hypot(at[0] - o[0], at[1] - o[1], at[2] - o[2]);
+        if (L < near && L < E.radius && this.clear(o, at)) near = L;
       }
       if (near === Infinity) continue;
       const k = near <= E.full ? 1 : 1 - (near - E.full) / (E.radius - E.full);
@@ -332,13 +398,14 @@ export class Room {
       const a = h[i - 1], b = h[i];
       if (a.t <= t) {
         const k = (t - a.t) / ((b.t - a.t) || 1);
-        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, cr: b.cr };
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, yaw: b.yaw, cr: b.cr };
       }
     }
     return h[0];
   }
 
   kill(q, p, head, w = p ? p.w : '') {
+    for (const n of [...this.nades]) if (n.stuck && n.by === q.id) { this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); }   // charges die with their owner
     q.alive = false; q.hp = 0; q.rsT = RESPAWN; q.d++;
     if (p && p !== q) { p.k++; this.score[p.team]++; }
     this.broadcast({ t: 'k', k: p ? p.id : 0, v: q.id, w, hs: head ? 1 : 0 });
@@ -357,7 +424,7 @@ export class Room {
     if (this.phase !== 'play') return;
     this.phase = 'end';
     this.endT = 10;
-    this.nades = [];
+    this.nades = []; this.fires = [];
     const s = this.score;
     this.broadcast({ t: 'end', winner: s.red === s.blue ? 'draw' : s.red > s.blue ? 'red' : 'blue', score: [s.red, s.blue] });
   }
@@ -366,7 +433,7 @@ export class Room {
     this.phase = 'play';
     this.timeLeft = this.matchTime;
     this.score = { red: 0, blue: 0 };
-    this.nades = []; this.smokes = [];
+    this.nades = []; this.smokes = []; this.fires = [];
     for (const p of this.players.values()) { p.k = 0; p.d = 0; this.spawn(p); }
     this.broadcast({ t: 'start' });
     this.roster();
@@ -406,7 +473,7 @@ export class Room {
         p.mag[p.w] += n; p.res[p.w] -= n;
       }
       if (p.bot && this.phase === 'play') this.bot(p, dt);
-      p.hist.push({ t, x: p.x, y: p.y, z: p.z, cr: p.cr });
+      p.hist.push({ t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, cr: p.cr });
       while (p.hist.length && p.hist[0].t < t - 1) p.hist.shift();
     }
     this.pingAcc += dt;
@@ -417,7 +484,7 @@ export class Room {
 
   snapshot(t) {
     const ps = [];
-    for (const p of this.players.values()) ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.cr ? 1 : 0, p.alive ? 1 : 0, p.w, p.team === 'red' ? 0 : 1]);
+    for (const p of this.players.values()) ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.cr, p.alive ? 1 : 0, p.w, p.team === 'red' ? 0 : 1]);
     const base = { t: 's', ts: t, ps, sc: [this.score.red, this.score.blue], tl: Math.ceil(this.timeLeft), ph: this.phase };
     for (const p of this.players.values()) {
       if (p.bot) continue;
@@ -432,8 +499,10 @@ export class Room {
   // ---- bots ----
   bot(b, dt) {
     const a = b.ai;
-    const eh = b.cr ? PHYS.eyec : PHYS.eye, o = [b.x, b.y + eh, b.z];
+    const eh = stanceEye(b.cr), o = [b.x, b.y + eh, b.z], mid = q => [1.3, 0.9, 0.25][q.cr];
     a.scan -= dt;
+    a.bombT -= dt;
+    if (a.blind > 0) { a.blind -= dt; a.scan = 0.1; a.target = 0; }
     if (a.scan <= 0) {
       a.scan = 0.2;
       let best = null, bd = 60;
@@ -442,7 +511,7 @@ export class Room {
         const dx = q.x - b.x, dz = q.z - b.z, d = Math.hypot(dx, dz);
         if (d > bd) continue;
         if (Math.abs(wrapA(Math.atan2(-dx, -dz) - b.yaw)) > 1.6 && a.hurtBy !== q.id) continue;
-        const c = [q.x, q.y + (q.cr ? 0.9 : 1.3), q.z], dir = [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
+        const c = [q.x, q.y + mid(q), q.z], dir = [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
         const L = Math.hypot(dir[0], dir[1], dir[2]);
         dir[0] /= L; dir[1] /= L; dir[2] /= L;
         if (rayMap(o, dir, this.map.boxes, L) < L - 0.2 || this.smoked(o, c)) continue;
@@ -456,19 +525,26 @@ export class Room {
     let ix = 0, iz = 0, speed = PHYS.walk;
     if (tq && tq.alive) {
       const dx = tq.x - b.x, dz = tq.z - b.z, d = Math.hypot(dx, dz);
-      const ty = Math.atan2(-dx, -dz), tp = Math.atan2(tq.y + (tq.cr ? 0.9 : 1.25) - (b.y + eh), d);
+      const ty = Math.atan2(-dx, -dz), tp = Math.atan2(tq.y + mid(tq) - (b.y + eh), d);
       b.yaw = wrapA(b.yaw + clampN(wrapA(ty - b.yaw), -4 * dt, 4 * dt));
       b.pitch += clampN(tp - b.pitch, -3 * dt, 3 * dt);
-      if ((a.strafeT -= dt) <= 0) { a.strafeT = rnd(0.6, 1.6); a.strafe = Math.random() < 0.5 ? -1 : 1; }
+      if ((a.strafeT -= dt) <= 0) { a.strafeT = rnd(0.6, 1.6); a.strafe = Math.random() < 0.5 ? -1 : 1; a.kneel = d > 14 && Math.random() < 0.4; }
+      b.cr = fitStance(b, a.kneel ? 1 : 0, this.map.boxes);
       ix = Math.cos(b.yaw) * a.strafe; iz = -Math.sin(b.yaw) * a.strafe;
       if (d > (b.w === 'sniper' ? 30 : 14)) { ix += -Math.sin(b.yaw) * 0.8; iz += -Math.cos(b.yaw) * 0.8; }
-      speed = PHYS.walk * 0.8;
+      speed = b.cr ? PHYS.crouch : PHYS.walk * 0.8;
       if (a.react > 0) a.react -= dt;
       else if (Math.abs(wrapA(ty - b.yaw)) < 0.12) {
         const e = a.err * (1 + d / 40);
+        if (a.bombT <= 0 && d > 11 && d < 26 && b.eqN > 0) {          // lob one now and then
+          a.bombT = rnd(14, 30);
+          this.useEquip(b, b.yaw + rnd(-0.06, 0.06), clampN((d - 14) * 0.028, -0.1, 0.4));
+        }
         this.fire(b, b.yaw + rnd(-e, e), b.pitch + rnd(-e, e) * 0.6);
       }
     } else {
+      b.cr = fitStance(b, 0, this.map.boxes);
+      if (b.cr) speed = b.cr === 2 ? PHYS.prone : PHYS.crouch;
       while (a.route.length && Math.hypot(a.route[0][0] - b.x, a.route[0][1] - b.z) < 0.8) a.route.shift();
       if (!a.route.length) a.route = randomRoute(this.map, b.x, b.z);
       const wp = a.route[0], dx = wp[0] - b.x, dz = wp[1] - b.z, d = Math.hypot(dx, dz) || 1;

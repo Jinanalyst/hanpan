@@ -1,7 +1,7 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
 import { getMap, isMap, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
-import { PHYS, NADE_DT, step, stepNade, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
+import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { packGear, unpackGear } from './shared/gear.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
@@ -369,13 +369,31 @@ function nadeThrown(m) {
   if (!EQUIP[m.w]?.thrown) return;
   const g = bake(buildEquip(m.w)), n = { x: m.o[0], y: m.o[1], z: m.o[2], vx: m.v[0], vy: m.v[1], vz: m.v[2] };
   g.position.set(n.x, n.y, n.z); scene.add(g);
-  nades.set(m.id, { g, n, acc: 0, left: 6, w: m.w, tm: m.tm, by: m.by });
+  nades.set(m.id, { g, n, acc: 0, left: EQUIP[m.w].fuse + 3, w: m.w, tm: m.tm, by: m.by, stuck: !!m.st });
   if (m.by === myId) { noiseSfx(0.12, 1400, 0.2); switchT = nowS(); reloadT = 0; }
 }
+function nadeStuck(m) {
+  const q = nades.get(m.id);
+  if (!q) return;
+  q.stuck = true; q.g.rotation.set(0, q.g.rotation.y, 0);
+  [q.n.x, q.n.y, q.n.z] = m.p; q.g.position.set(...m.p);
+  noiseSfx(0.06, 900, 0.2);
+  // a blinking light in the team's colour shows who placed it
+  const L = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: q.tm === myTeam ? 0x5fff6a : 0xff3a20, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  L.scale.setScalar(0.28); L.position.y = 0.1; q.g.add(L); q.light = L;
+}
+const myCharge = () => { for (const q of nades.values()) if (q.w === 'charge' && q.by === myId) return q; return null; };
 function nadeGone(id) { const q = nades.get(id); if (q) { scene.remove(q.g); dispose(q.g); nades.delete(id); } }
 function nadeBurst(m) {
   nadeGone(m.id);
   const p = new THREE.Vector3(...m.p), dx = p.x - me.x, dz = p.z - me.z, dist = Math.hypot(dx, dz), pan = -Math.sin(wrapA(Math.atan2(-dx, -dz) - me.yaw)), v = 1 / (1 + dist * 0.05);
+  if (m.w === 'fizz') { puff(p, 0x888888, 0.5, 0.5); noiseSfx(0.2, 2400, 0.2 * v); return; }
+  if (m.w === 'fire') { addFire(p, m.d || EQUIP.fire.burns); noiseSfx(0.8, 500, 0.45 * v); noiseSfx(0.15, 4200, 0.25 * v); return; }
+  if (m.w === 'flash') {
+    puff(p, 0xffffff, 1.6, 0.25); blastLight.position.set(p.x, p.y + 0.4, p.z); blastLight.intensity = 140;
+    shotSfx('pistol', dist * 0.3, pan); noiseSfx(0.25, 3800, 0.5 * v);
+    return;
+  }
   if (m.w === 'smoke') { addSmoke(p, m.d || EQUIP.smoke.lasts); noiseSfx(0.9, 3000, 0.22 * v); return; }
   for (let i = 0; i < 9; i++) puff(V.set(p.x + rnd(-0.8, 0.8), p.y + rnd(0.1, 1.2), p.z + rnd(-0.8, 0.8)), i < 4 ? 0xffb040 : 0x3a342c, rnd(1.2, 2.4), rnd(0.35, 0.9));
   for (let i = 0; i < 8; i++) tracer(p, V.set(p.x + rnd(-4, 4), p.y + rnd(0.3, 3), p.z + rnd(-4, 4)).clone());
@@ -385,6 +403,59 @@ function nadeBurst(m) {
 }
 const blastLight = new THREE.PointLight(0xffa050, 0, 16, 2); scene.add(blastLight);
 let shake = 0;
+const fires = [];    // { g, t, life }
+function addFire(p, life) {
+  const g = new THREE.Group();
+  for (let i = 0; i < 44; i++) {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: [0xff7a1f, 0xffb038, 0xff4a14][i % 3], blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+    const a = Math.random() * 6.283, R = Math.sqrt(Math.random()) * EQUIP.fire.radius * 0.9;
+    m.userData = { x: Math.cos(a) * R, z: Math.sin(a) * R, s: rnd(0.9, 1.8), o: Math.random() };
+    g.add(m);
+  }
+  const burnt = new THREE.Mesh(new THREE.CircleGeometry(EQUIP.fire.radius, 28), new THREE.MeshBasicMaterial({ color: 0x1a120c, transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  burnt.rotation.x = -Math.PI / 2; burnt.position.y = 0.05; burnt.userData.ground = true; g.add(burnt);
+  g.position.set(p.x, p.y, p.z); scene.add(g);
+  fires.push({ g, t: 0, life, crackle: 0 });
+}
+function freeGroup(g) { scene.remove(g); for (const m of g.children) { m.material.dispose(); if (m.isMesh) m.geometry.dispose(); } }
+function updateFires(dt) {
+  for (let i = fires.length - 1; i >= 0; i--) {
+    const f = fires[i]; f.t += dt;
+    const grow = Math.min(1, f.t / 0.4) * Math.min(1, Math.max(0, (f.life - f.t) / 0.8));
+    for (const m of f.g.children) {
+      if (m.userData.ground) { m.material.opacity = 0.55 * Math.min(1, f.t * 2, Math.max(0, f.life - f.t + 1)); continue; }
+      const u = m.userData, k = (f.t * 1.3 + u.o) % 1;
+      m.position.set(u.x, 0.15 + k * 1.1, u.z); m.scale.setScalar(u.s * (1.2 - k * 0.8) * (0.3 + 0.7 * grow)); m.material.opacity = (1 - k) * 0.85 * grow;
+    }
+    const d = Math.hypot(f.g.position.x - me.x, f.g.position.z - me.z);
+    if ((f.crackle -= dt) <= 0) { f.crackle = rnd(0.08, 0.25); noiseSfx(0.05, rnd(900, 2600), 0.1 / (1 + d * 0.15)); }
+    if (f.t >= f.life) { freeGroup(f.g); fires.splice(i, 1); }
+  }
+}
+// The path a throw would take, shown while G is held.
+const arc = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(240 * 3), 3)), new THREE.PointsMaterial({ color: 0xffe2a0, size: 5, sizeAttenuation: false, transparent: true, opacity: 0.85, depthTest: false }));
+const arcEnd = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.32, 24), new THREE.MeshBasicMaterial({ color: 0xffe2a0, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false }));
+arc.frustumCulled = false; arc.visible = arcEnd.visible = false; arcEnd.rotation.x = -Math.PI / 2; arc.renderOrder = arcEnd.renderOrder = 5; scene.add(arc, arcEnd);
+let aiming = false;
+function stopAiming() { aiming = false; arc.visible = arcEnd.visible = false; }
+function updateArc() {
+  const E = EQUIP[act.eq];
+  if (aiming && (!srv.al || !srv.eq || phase !== 'play' || !E.thrown)) stopAiming();
+  if (!aiming) return;
+  const n = nadeStart(me, me.yaw, me.pitch, E), p = arc.geometry.attributes.position, side = new THREE.Vector3(Math.cos(me.yaw), 0, -Math.sin(me.yaw));
+  let i = 0, t = 0;
+  for (; i < 240 && t < Math.min(E.fuse, 3); i++) {
+    const off = Math.max(0, 0.25 - t);   // starts at the hand instead of inside the eye
+    p.setXYZ(i, n.x + side.x * off, n.y - off * 0.6, n.z + side.z * off);
+    let hit = false;
+    for (let k = 0; k < 2; k++) { hit = stepNade(n, NADE_DT, BOXES) || hit; t += NADE_DT; if (hit && (E.impact || E.sticky)) break; }
+    if ((hit && (E.impact || E.sticky)) || (Math.hypot(n.vx, n.vz) < 0.2 && hit)) { i++; break; }
+  }
+  arc.geometry.setDrawRange(0, i); p.needsUpdate = true;
+  arcEnd.position.set(n.x, n.y, n.z);
+  arc.visible = arcEnd.visible = true;
+}
+let blindEnd = 0, blindMax = 1;   // real time, so a slow screen is not blind for longer
 const smokes = [];   // { g, t, life }
 function addSmoke(p, life) {
   const g = new THREE.Group();
@@ -399,13 +470,17 @@ function addSmoke(p, life) {
 }
 function clearThrown() {
   for (const id of [...nades.keys()]) nadeGone(id);
+  for (const f of fires.splice(0)) freeGroup(f.g);
+  stopAiming(); blindEnd = 0;
   for (const s of smokes.splice(0)) { scene.remove(s.g); for (const m of s.g.children) m.material.dispose(); }
 }
 function updateThrown(dt) {
   for (const [id, q] of nades) {
-    for (q.acc += dt; q.acc >= NADE_DT; q.acc -= NADE_DT) stepNade(q.n, NADE_DT, BOXES);
+    if (q.stuck) { if (q.light) q.light.material.opacity = Math.sin(nowS() * 9) > 0 ? 0.9 : 0.15; continue; }
+    const E = EQUIP[q.w];
+    for (q.acc += dt; q.acc >= NADE_DT; q.acc -= NADE_DT) if (!q.held && stepNade(q.n, NADE_DT, BOXES) && (E.sticky || E.impact)) q.held = true;   // waits for the server's word
     q.g.position.set(q.n.x, q.n.y, q.n.z);
-    const v = Math.hypot(q.n.vx, q.n.vz); q.g.rotation.x += v * dt * 1.4; q.g.rotation.z += v * dt * 0.7;
+    const v = q.held ? 0 : Math.hypot(q.n.vx, q.n.vz); q.g.rotation.x += v * dt * 1.4; q.g.rotation.z += v * dt * 0.7;
     if ((q.left -= dt) <= 0) nadeGone(id);   // its end was missed
   }
   for (let i = smokes.length - 1; i >= 0; i--) {
@@ -414,6 +489,7 @@ function updateThrown(dt) {
     for (const m of s.g.children) { const u = m.userData; m.position.set(u.x * k, u.y * k, u.z * k); m.scale.setScalar(u.s * k); m.material.opacity = 0.85 * fade; m.material.rotation += u.w * dt; }
     if (s.t >= s.life) { scene.remove(s.g); for (const m of s.g.children) m.material.dispose(); smokes.splice(i, 1); }
   }
+  updateFires(dt);
   blastLight.intensity *= 1 - Math.min(1, dt * 12);
   shake = Math.max(0, shake - dt * 0.12);
 }
@@ -460,12 +536,13 @@ function noiseSfx(d, f, v, at = 0) {
 let profile = loadProfile();
 const kit = () => activeKit(profile);
 let net = null, inGame = false, myId = 0, myTeam = 'red', roster = new Map(), snaps = [], offEst = null;
-const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: false, yaw: 0, pitch: 0 };
+const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, yaw: 0, pitch: 0 };
 let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', eq: 0, al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
 let act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }, cur = act.lo, switchT = 0;   // what I carry right now; set by the server at each spawn
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
 let reloadT = 0, reloadDur = 1, shotTimes = [], deathAt = null, killer = 0, wasAlive = true, stepAcc = 0, inputAcc = 0, lastHurt = 0;
+let stance = 0, stanceT = 0, slideT = 0, slideDir = [0, 0], slideNext = 0, holdKneel = store.get('hanpan-hold', '0') === '1';
 let kick = { z: 0, r: 0 }, sway = { x: 0, y: 0 }, bobT = 0, lockFailed = false;
 const others = new Map();
 const K = {};
@@ -488,7 +565,7 @@ function chatLine(name, text, cls) {
   setTimeout(() => row.classList.add('old'), 9000);
 }
 function openChat() {
-  chatOpen = true; trigger = ads = false; voice.stop();
+  chatOpen = true; trigger = ads = false; stopAiming(); voice.stop();
   for (const k in K) K[k] = false;
   $('chatBox').classList.add('open'); $('chatRow').hidden = false; $('chatIn').value = ''; $('chatIn').focus();
 }
@@ -536,7 +613,7 @@ function paintMutes() {
 function onMsg(m) {
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; } break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { stance = me.cr = 0; slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -557,8 +634,10 @@ function onMsg(m) {
     case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
     case 'c': if (!muted.has(m.id)) chatLine(pname(m.id), String(m.x), m.id === myId ? 'me' : ''); break;
     case 'cx': chatLine('', 'You are sending messages too fast.', 'sys'); break;
-    case 'gt': nadeThrown(m); break;
+    case 'gt': nadeThrown(m); if (m.st) nadeStuck({ id: m.id, p: m.o }); break;
+    case 'gs': nadeStuck(m); break;
     case 'gx': nadeBurst(m); break;
+    case 'fl': blindMax = Math.max(blindEnd - nowS(), m.s); blindEnd = nowS() + blindMax; blip(3200, Math.min(2.5, m.s), 0.06, 'sine'); stopAiming(); break;
     case 'heal': blip(520, 0.12, 0.08, 'triangle'); blip(700, 0.16, 0.08, 'triangle', 0.12); break;
     case 'pi': send({ t: 'po', s: m.s }); break;
   }
@@ -621,24 +700,29 @@ function interpRemotes(dt) {
       if (o.tag) o.tag.visible = false;
       continue;
     }
+    o.pr = (o.pr || 0) + ((s.cr === 2 ? 1 : 0) - (o.pr || 0)) * Math.min(1, dt * 9);
     if (o.dead) { o.dead = 0; o.px = s.x; o.pz = s.z; }
     const sp2 = Math.hypot(s.x - o.px, s.z - o.pz) / Math.max(dt, 1e-3);
     o.px = s.x; o.pz = s.z;
     o.walk += dt * Math.min(sp2, 7) * 1.6;
-    g.position.set(s.x, s.y, s.z);
-    g.rotation.set(0, s.yaw, 0, 'YXZ');
-    u.aim.rotation.x = s.pitch; u.head.rotation.x = s.pitch * 0.5;
+    const pr = o.pr;                       // 0 upright, 1 lying face down
+    g.position.set(s.x + Math.sin(s.yaw) * 0.85 * pr, s.y + 0.16 * pr, s.z + Math.cos(s.yaw) * 0.85 * pr);
+    g.rotation.set(-Math.PI / 2 * pr, s.yaw, 0, 'YXZ');
+    u.aim.rotation.x = s.pitch + pr * Math.PI / 2; u.head.rotation.x = s.pitch * 0.5 * (1 - pr) + pr * 1.25;
     const sw = Math.sin(o.walk) * Math.min(1, sp2 / 3) * 0.7;
-    if (s.cr) {
+    if (s.cr === 2) {
+      u.torso.position.y = 0.9;
+      u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.x = 0; l.rotation.z = (i ? 1 : -1) * (0.14 + sw * 0.1); l.userData.knee.rotation.x = -Math.max(0, i ? sw : -sw) * 0.8; });
+    } else if (s.cr) {
       u.torso.position.y = 0.55;
-      u.legs.forEach((l, i) => { l.position.y = 0.55; l.rotation.x = -1.1 + (i ? sw : -sw) * 0.3; l.userData.knee.rotation.x = 1.7; });
+      u.legs.forEach((l, i) => { l.position.y = 0.55; l.rotation.z = 0; l.rotation.x = i ? 0.05 + sw * 0.3 : 1.35 - sw * 0.3; l.userData.knee.rotation.x = i ? -1.5 : -1.35; });   // one knee on the ground
     } else {
       u.torso.position.y = 0.9;
-      u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.x = i ? sw : -sw; l.userData.knee.rotation.x = Math.max(0, (i ? -sw : sw)) * 1.1; });
+      u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.z = 0; l.rotation.x = i ? sw : -sw; l.userData.knee.rotation.x = -Math.max(0, (i ? -sw : sw)) * 1.1; });
     }
     const mate = o.team === myTeam;
     if (mate && !o.tag) { const p = roster.get(id); if (p) { o.tag = nameTag(p.n, '#9fe0ff'); g.add(o.tag); } }
-    if (o.tag) o.tag.visible = mate;
+    if (o.tag) { o.tag.visible = mate; o.tag.position.set(0, 2.15 - 1.2 * pr, 0.85 * pr); }
   }
 }
 
@@ -646,7 +730,7 @@ function interpRemotes(dt) {
 function curSpread() {
   const W = WEAPONS[cur], hs = Math.hypot(me.vx, me.vz);
   let s = W.spread.hip + (W.spread.ads - W.spread.hip) * adsT + W.spread.move * clamp(hs / PHYS.walk, 0, 1.3) + (me.ground ? 0 : 0.06) + bloom;
-  if (me.cr) s *= 0.7;
+  s *= [1, 0.7, 0.5][me.cr];
   return s;
 }
 function ammoShown() {
@@ -656,7 +740,7 @@ function ammoShown() {
 }
 function tryFire() {
   const W = WEAPONS[cur], t = nowS();
-  if (!srv.al || phase !== 'play' || reloadT > 0 || t < nextFire || t - switchT < 0.35) return;
+  if (!srv.al || phase !== 'play' || aiming || slideT > 0 || reloadT > 0 || t < nextFire || t - switchT < 0.35) return;
   if (ammoShown() <= 0) { if (srv.r > 0) { send({ t: 'r' }); nextFire = t + 0.4; } else blip(900, 0.05, 0.05); return; }
   if (!W.auto) { if (latch) return; latch = true; }
   nextFire = t + W.rate;
@@ -664,7 +748,7 @@ function tryFire() {
   send({ t: 'f', yaw, pitch });
   shotTimes.push(t);
   bloom = Math.min(W.spread.max, bloom + W.spread.bloom);
-  const kv = W.recoil.v * (1 - 0.4 * adsT) * (me.cr ? 0.8 : 1);
+  const kv = W.recoil.v * (1 - 0.4 * adsT) * [1, 0.8, 0.6][me.cr];
   me.pitch = clamp(me.pitch + kv, -1.5, 1.5); me.yaw += gauss() * W.recoil.h; recoilDebt += kv * 0.55;
   const hard = W.recoil.v >= 0.045;
   kick.z = hard ? 0.12 : 0.05; kick.r = hard ? 0.18 : 0.07;
@@ -686,7 +770,7 @@ function tryFire() {
 function remoteShot(m) {
   const o = new THREE.Vector3(...m.o), e = new THREE.Vector3(...m.e);
   const q = others.get(m.id);
-  if (q) { o.set(q.s.x, q.s.y + (q.s.cr ? 1 : 1.4), q.s.z); q.lastShot = nowS(); }
+  if (q) { o.set(q.s.x, q.s.y + [1.4, 1, 0.4][q.s.cr], q.s.z); q.lastShot = nowS(); }
   tracer(o, e);
   if (!m.hit) impact(e, null);
   for (const p of m.m || []) { const x = new THREE.Vector3(...p); tracer(o, x); if (!m.hit) impact(x, null); }
@@ -779,21 +863,47 @@ addEventListener('keydown', e => {
   K[e.code] = true;
   if (e.code === 'Tab') { e.preventDefault(); renderBoard(); $('board').hidden = false; }
   if (e.code === 'KeyR') send({ t: 'r' });
-  if (e.code === 'KeyG' && !e.repeat && srv.al) send({ t: 'g', yaw: me.yaw, pitch: me.pitch });
+  if (e.code === 'KeyG' && !e.repeat && srv.al && phase === 'play') {
+    if (!EQUIP[act.eq].thrown || myCharge()) send({ t: 'g', yaw: me.yaw, pitch: me.pitch });   // med kit, or blow the charge
+    else if (srv.eq > 0) { aiming = true; trigger = ads = false; }
+  }
+  if (!e.repeat && srv.al) {
+    if (e.code === 'KeyC') kneelKey();
+    if (e.code === 'KeyX') setStance(stance === 2 ? 0 : 2);
+    if (e.code === 'Space' && stance) { setStance(0); K.Space = false; }   // Space stands up first
+  }
   for (const [key, w] of [['Digit1', act.lo], ['Digit2', act.sa]]) {
     if (e.code === key && cur !== w) { cur = w; switchT = nowS(); reloadT = 0; send({ t: 'w', w }); }
   }
   if (e.code === 'Space') e.preventDefault();
 });
-addEventListener('keyup', e => { K[e.code] = false; if (e.code === 'KeyV') voice.stop(); if (e.code === 'Tab') $('board').hidden = true; });
-addEventListener('blur', () => { for (const k in K) K[k] = false; trigger = false; ads = false; voice.stop(); });
+// C: kneel or stand up. While sprinting it becomes a slide that ends on one knee.
+function kneelKey() {
+  if (stance === 0 && K.ShiftLeft && K.KeyW && me.ground && Math.hypot(me.vx, me.vz) > 5.8 && nowS() > slideNext) {
+    const v = Math.hypot(me.vx, me.vz);
+    slideDir = [me.vx / v, me.vz / v]; slideT = 0.65; slideNext = nowS() + 1.6; noiseSfx(0.5, 500, 0.14);
+    setStance(1);
+  } else if (holdKneel) setStance(1); else setStance(stance === 1 ? 0 : 1);
+}
+function setStance(want) {
+  const t = nowS();
+  if (t - stanceT < 0.25 || (want === 2 && !me.ground)) return;
+  stance = want; stanceT = t;
+  if (want !== 1) slideT = 0;
+  noiseSfx(0.12, 380, 0.07);
+}
+addEventListener('keyup', e => {
+  if (e.code === 'KeyG' && aiming) { stopAiming(); send({ t: 'g', yaw: me.yaw, pitch: me.pitch }); }
+  if (e.code === 'KeyC' && holdKneel && stance === 1) { stance = 0; stanceT = 0; }
+  K[e.code] = false; if (e.code === 'KeyV') voice.stop(); if (e.code === 'Tab') $('board').hidden = true; });
+addEventListener('blur', () => { for (const k in K) K[k] = false; trigger = false; ads = false; stopAiming(); voice.stop(); });
 canvas.addEventListener('mousedown', e => {
   if (!inGame) return;
   if (chatOpen) { e.preventDefault(); return; }
   if (document.pointerLockElement !== canvas && !lockFailed) { lock(); return; }
   audio();
   if (e.button === 0) { trigger = true; latch = false; }
-  if (e.button === 2) ads = true;
+  if (e.button === 2) { if (aiming) stopAiming(); else ads = true; }   // right click cancels a throw
 });
 addEventListener('mouseup', e => { if (e.button === 0) { trigger = false; latch = false; } if (e.button === 2) ads = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -814,6 +924,7 @@ function lock() {
 document.addEventListener('pointerlockchange', () => {
   if (!inGame) return;
   if (document.pointerLockElement !== canvas && chatOpen) closeChat();
+  if (document.pointerLockElement !== canvas) stopAiming();
   $('pauseOv').hidden = document.pointerLockElement === canvas;
 });
 document.addEventListener('pointerlockerror', () => { lockFailed = true; $('pauseOv').hidden = true; });
@@ -822,6 +933,8 @@ document.addEventListener('pointerlockerror', () => { lockFailed = true; $('paus
 $('nameIn').value = loadName();
 const sensIn = $('sensIn'); sensIn.value = sens; $('sensOut').textContent = sens.toFixed(1);
 sensIn.oninput = () => { sens = +sensIn.value; $('sensOut').textContent = sens.toFixed(1); store.set('hanpan-sens', sens); };
+$('holdKneel').checked = holdKneel;
+$('holdKneel').onchange = () => { holdKneel = $('holdKneel').checked; store.set('hanpan-hold', holdKneel ? '1' : '0'); };
 $('voiceOn').checked = voiceOn;
 $('voiceOn').onchange = () => { voiceOn = $('voiceOn').checked; store.set('hanpan-voice', voiceOn ? '1' : '0'); };
 let owned = new Set();
@@ -1014,13 +1127,18 @@ function updateLocal(dt, t) {
     const f = (K.KeyW ? 1 : 0) - (K.KeyS ? 1 : 0), s = (K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0);
     let ix = -Math.sin(me.yaw) * f + Math.cos(me.yaw) * s, iz = -Math.cos(me.yaw) * f - Math.sin(me.yaw) * s;
     const l = Math.hypot(ix, iz); if (l > 1) { ix /= l; iz /= l; }
-    const wantCr = !!K.KeyC;
-    me.cr = wantCr || (me.cr && !!hits(me.x, me.y, me.z, PHYS.h, BOXES));
-    const sprint = K.ShiftLeft && f > 0 && !me.cr && !ads && !trigger;
-    const speed = me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
-    if (K.Space && me.ground) { me.vy = PHYS.jump; me.ground = false; }
+    if (stance === 1 && K.ShiftLeft && f > 0 && slideT <= 0 && !holdKneel && t - stanceT > 0.4) setStance(0);   // sprinting stands up
+    me.cr = fitStance(me, stance, BOXES);
+    if (slideT > 0) {
+      slideT -= dt;
+      if (Math.hypot(me.vx, me.vz) < 2.5 || !me.ground) slideT = 0;
+      ix = slideDir[0]; iz = slideDir[1];
+    }
+    const sprint = K.ShiftLeft && f > 0 && !me.cr && !ads && !trigger && !aiming;
+    const speed = slideT > 0 ? PHYS.crouch + (PHYS.slide - PHYS.crouch) * Math.min(1, slideT / 0.45) : me.cr === 2 ? PHYS.prone : me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
+    if (K.Space && me.ground && !me.cr && !stance) { me.vy = PHYS.jump; me.ground = false; }
     step(me, ix, iz, speed, dt, BOXES);
-    eyeH += ((me.cr ? PHYS.eyec : PHYS.eye) - eyeH) * Math.min(1, dt * 12);
+    eyeH += (stanceEye(me.cr) - eyeH) * Math.min(1, dt * 12);
     const hs = Math.hypot(me.vx, me.vz);
     if (me.ground && hs > 1) { bobT += dt * hs * 1.7; stepAcc += hs * dt; if (stepAcc > (sprint ? 2.4 : 1.9) && !me.cr) { stepAcc = 0; noiseSfx(0.07, 700, 0.05); } }
     adsT += ((ads && reloadT <= 0 && !sprint ? 1 : 0) - adsT) * Math.min(1, dt * (cur === 'sniper' ? 7 : 11));
@@ -1031,10 +1149,10 @@ function updateLocal(dt, t) {
     inputAcc += dt;
     if (inputAcc >= 0.05) {
       inputAcc = 0;
-      send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr ? 1 : 0 });
+      send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr });
     }
     cam.position.set(me.x, me.y + eyeH + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z);
-    cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004);
+    cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004 + Math.min(1, Math.max(0, slideT) * 4) * 0.06);
   } else if (deathAt) {
     adsT = 0; trigger = false;
     const k = others.get(killer);
@@ -1047,7 +1165,7 @@ function updateLocal(dt, t) {
   for (const k in VMS) VMS[k].g.visible = k === cur;
   const vm = VMS[cur];
   if (vm) {
-    const sw = Math.max(0, 0.35 - (t - switchT)) / 0.35;
+    const sw = Math.max(0, 0.35 - (t - switchT)) / 0.35 + (aiming ? 0.5 : 0);
     const rl = reloadT > 0 ? Math.sin(Math.PI * (1 - reloadT / reloadDur)) : 0;
     sway.x *= 1 - Math.min(1, dt * 8); sway.y *= 1 - Math.min(1, dt * 8);
     kick.z *= 1 - Math.min(1, dt * 16); kick.r *= 1 - Math.min(1, dt * 14);
@@ -1074,9 +1192,16 @@ function updateHud(dt, t) {
   setText('wName', W.name); setText('ammoN', ammoShown()); setText('resN', '/ ' + srv.r);
   $('rlB').style.width = reloadT > 0 ? (1 - reloadT / reloadDur) * 100 + '%' : '0';
   const E = EQUIP[act.eq];
-  setText('eqN', E.name + ' × ' + srv.eq + '  [G]'); $('eqN').classList.toggle('out', !srv.eq);
+  const live = act.eq === 'charge' && myCharge();
+  setText('eqN', live ? 'Charge set: G to blow it' : E.name + ' × ' + srv.eq + '  [G]'); $('eqN').classList.toggle('out', !srv.eq && !live);
+  setText('stance', ['', 'Kneeling', 'Lying down'][me.cr]);
+  setText('aimHint', aiming ? 'Release G to throw. Right click to cancel.' : '');
+  updateArc();
+  const blindT = blindEnd - t;
+  $('blind').style.opacity = srv.al && blindT > 0 ? Math.min(1, blindT / Math.max(0.6, blindMax * 0.6)) : 0;
   let danger = false;
-  for (const q of nades.values()) if (q.w === 'frag' && (q.tm !== myTeam || q.by === myId) && Math.hypot(q.n.x - me.x, q.n.z - me.z) < EQUIP.frag.radius) danger = true;
+  for (const f of fires) if (Math.hypot(f.g.position.x - me.x, f.g.position.z - me.z) < EQUIP.fire.radius + 0.5) danger = true;
+  for (const q of nades.values()) if ((q.w === 'frag' || (q.w === 'charge' && q.by !== myId)) && (q.tm !== myTeam || q.by === myId) && Math.hypot(q.n.x - me.x, q.n.z - me.z) < EQUIP.frag.radius) danger = true;
   $('nadeWarn').hidden = !danger || !srv.al;
   setText('net', `${MAP.name}\nping ${srv.pg} ms`);
   const gap = 4 + curSpread() / Math.tan(cam.fov * Math.PI / 360) * innerHeight / 2;
@@ -1089,7 +1214,7 @@ function updateHud(dt, t) {
   vignT = Math.max(0, vignT - dt); $('vign').style.opacity = Math.max(vignT, srv.al && srv.hp < 35 ? 0.35 : 0);
   $('scope').style.display = W.scope && adsT > 0.9 && srv.al ? 'block' : 'none';
   if (!srv.al && phase === 'play') {
-    setText('center', `${killer === myId ? 'Caught by your own grenade' : 'Eliminated by ' + pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
+    setText('center', `${killer === myId ? 'Caught by your own bomb' : 'Eliminated by ' + pname(killer)}\nRedeploying in ${srv.rs.toFixed(1)}`);
   } else if (srv.al && srv.pr && phase === 'play') setText('center', 'Spawn protection');
   else if (phase === 'play') setText('center', '');
 }
