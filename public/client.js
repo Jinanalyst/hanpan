@@ -1,7 +1,7 @@
 // HANPAN client: rendering, local movement prediction, interpolation of other players, HUD and audio.
 import * as THREE from 'three';
 import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, MAP_LIST, DEFAULT_MAP } from './shared/map.js';
-import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
+import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, WALL, alongWall, leanOff, wallAt, lowWall, findWall, peekRoom, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
@@ -600,13 +600,14 @@ function noiseSfx(d, f, v, at = 0) {
 let profile = loadProfile();
 const kit = () => activeKit(profile);
 let net = null, inGame = false, myId = 0, myTeam = 'red', roster = new Map(), snaps = [], offEst = null;
-const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, yaw: 0, pitch: 0 };
+const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, wl: 0, pk: 0, yaw: 0, pitch: 0 };
 let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', eq: 0, al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
 let act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }, cur = act.lo, switchT = 0;   // what I carry right now; set by the server at each spawn
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
 let reloadT = 0, reloadDur = 1, shotTimes = [], deathAt = null, killer = 0, wasAlive = true, stepAcc = 0, inputAcc = 0, lastHurt = 0;
 let stance = 0, stanceT = 0, slideT = 0, slideDir = [0, 0], slideNext = 0, holdKneel = store.get('hanpan-hold', '0') === '1';
+let leanT = 0, leaveT = 0, leanKnelt = false, leanK = 0, leanX = 0, leanZ = 0, leanUses = +store.get('hanpan-lean', 0) || 0, nearWall = 0, nearAt = 0;
 let kick = { z: 0, r: 0 }, sway = { x: 0, y: 0 }, bobT = 0, lockFailed = false;
 const others = new Map();
 const K = {};
@@ -686,7 +687,7 @@ function onMsg(m) {
   }
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; if (m.lo) { stance = me.cr = 0; slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; leanEnd(); if (m.lo) { stance = me.cr = 0; leanX = leanZ = slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -771,9 +772,11 @@ function interpRemotes(dt) {
     const s = o.s;
     s.x = A[1] + (B[1] - A[1]) * k; s.y = A[2] + (B[2] - A[2]) * k; s.z = A[3] + (B[3] - A[3]) * k;
     s.yaw = A[4] + wrapA(B[4] - A[4]) * k; s.pitch = A[5] + (B[5] - A[5]) * k; s.cr = B[6]; s.alive = B[7];
+    s.wl = B[10] | 0; s.pk = s.wl ? (A[10] === B[10] ? A[11] + (B[11] - A[11]) * k : B[11]) : 0;
     const g = o.g, u = g.userData;
     if (!s.alive) {
       o.dead = Math.min(1, o.dead + dt * 3);
+      u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0; o.lean = 0;
       g.rotation.set(-Math.PI / 2 * o.dead, s.yaw, 0, 'YXZ');
       g.position.set(s.x, s.y + 0.15 * o.dead, s.z);
       if (o.tag) o.tag.visible = false;
@@ -799,17 +802,38 @@ function interpRemotes(dt) {
       u.torso.position.y = 0.9;
       u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.z = 0; l.rotation.x = i ? sw : -sw; l.userData.knee.rotation.x = -Math.max(0, (i ? -sw : sw)) * 1.1; });
     }
+    poseLean(o, s, dt, sp2, pr);
     const mate = o.team === myTeam;
     if (mate && !o.tag) { const p = roster.get(id); if (p) { o.tag = nameTag(p.n, '#9fe0ff'); g.add(o.tag); } }
     if (o.tag) { o.tag.visible = mate; o.tag.position.set(0, 2.15 - 1.2 * pr, 0.85 * pr); }
   }
 }
 
+// Back (or shoulder) on the wall; the upper body leans out along it.
+function poseLean(o, s, dt, sp2, pr) {
+  const u = o.g.userData, w = s.cr === 2 ? null : WALL[s.wl];
+  if (w) { o.wall = w; o.pk = s.pk; } else o.pk = (o.pk || 0) * (1 - Math.min(1, dt * 10));
+  o.lean = (o.lean || 0) + ((w ? 1 : 0) - (o.lean || 0)) * Math.min(1, dt * 10);
+  if (o.lean < 0.01) { if (u.torso.rotation.x || u.torso.rotation.z) { u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0; } return; }
+  const [wx, wz] = o.wall, [tx, tz] = alongWall(o.wall), k = o.lean, pk = o.pk, a = Math.abs(pk), sn = Math.sin(s.yaw), cs = Math.cos(s.yaw);
+  const back = Math.max(0, wx * sn + wz * cs), hunch = s.cr === 1 ? 0.5 * (1 - a) : 0;   // back: 1 with the back to the wall
+  o.g.position.x += (tx * pk * 0.26 + wx * 0.07) * k; o.g.position.z += (tz * pk * 0.26 + wz * 0.07) * k;
+  const dx = tx * pk * 0.5 + wx * 0.1 * back * (1 - a), dz = tz * pk * 0.5 + wz * 0.1 * back * (1 - a);
+  const side = (dx * cs - dz * sn) * k, rear = (dx * sn + dz * cs - hunch) * k * (1 - pr);
+  u.torso.rotation.set(rear, 0, -side);
+  u.aim.rotation.x -= rear; u.aim.rotation.z = side * 0.8; u.head.rotation.x -= rear * 0.6;
+  if (s.cr === 1) {
+    const low = k * (1 - a);
+    u.torso.position.y -= 0.15 * low;
+    u.legs.forEach((l, i) => { l.position.y -= 0.15 * low; l.rotation.x += (i ? -0.55 : 0.33) * low; l.userData.knee.rotation.x += (i ? 0.43 : -0.33) * low; });
+  } else if (back > 0.5 && sp2 < 0.4 && a < 0.3) { u.legs[0].rotation.x = 0.5 * k; u.legs[0].userData.knee.rotation.x = -1.25 * k; }   // one foot on the wall
+}
+
 /* ---------------- shooting ---------------- */
 function curSpread() {
   const W = WEAPONS[cur], hs = Math.hypot(me.vx, me.vz);
   let s = W.spread.hip + (W.spread.ads - W.spread.hip) * adsT + W.spread.move * clamp(hs / PHYS.walk, 0, 1.3) + (me.ground ? 0 : 0.06) + bloom;
-  s *= [1, 0.7, 0.5][me.cr];
+  s *= [1, 0.7, 0.5][me.cr] * (me.wl ? 0.85 : 1);   // a wall steadies you
   return s;
 }
 function ammoShown() {
@@ -835,7 +859,7 @@ function tryFire() {
   flashLight.intensity = 6; vmFlashLight.intensity = 2;
   shotSfx(cur);
   // local prediction of where the bullet lands (the server decides hits)
-  const eye = new THREE.Vector3(me.x, me.y + eyeH, me.z), d = dirFrom(yaw, pitch), o = [eye.x, eye.y, eye.z], n = [0, 0, 0];
+  const eye = new THREE.Vector3(me.x + leanX, me.y + eyeH, me.z + leanZ), d = dirFrom(yaw, pitch), o = [eye.x, eye.y, eye.z], n = [0, 0, 0];
   const from = cam.localToWorld(V.set(adsT > 0.5 ? 0 : 0.25, adsT > 0.5 ? -0.08 : -0.2, -2)).clone();
   for (let i = 0; i < (W.pellets || 1); i++) {
     if (W.pellets) d.splice(0, 3, ...dirFrom(yaw + rnd(-W.pelletSpread, W.pelletSpread), pitch + rnd(-W.pelletSpread, W.pelletSpread)));
@@ -849,7 +873,7 @@ function tryFire() {
 function remoteShot(m) {
   const o = new THREE.Vector3(...m.o), e = new THREE.Vector3(...m.e);
   const q = others.get(m.id);
-  if (q) { o.set(q.s.x, q.s.y + [1.4, 1, 0.4][q.s.cr], q.s.z); q.lastShot = nowS(); }
+  if (q) { const l = leanOff(q.s); o.set(q.s.x + l.x, q.s.y + [1.4, 1, 0.4][q.s.cr] + l.y, q.s.z + l.z); q.lastShot = nowS(); }
   tracer(o, e);
   if (!m.hit) impact(e, null);
   for (const p of m.m || []) { const x = new THREE.Vector3(...p); tracer(o, x); if (!m.hit) impact(x, null); }
@@ -947,7 +971,9 @@ addEventListener('keydown', e => {
     else if (srv.eq > 0) { aiming = true; trigger = ads = false; }
   }
   if (!e.repeat && srv.al) {
-    if (e.code === 'KeyC') kneelKey();
+    if (e.code === 'KeyF') leanKey();
+    if (e.code === 'Space' && me.wl) { leanEnd(); K.Space = false; }   // Space steps off the wall
+    if (e.code === 'KeyC' && !leanKnelt) kneelKey();
     if (e.code === 'KeyX') setStance(stance === 2 ? 0 : 2);
     if (e.code === 'Space' && stance) { setStance(0); K.Space = false; }   // Space stands up first
   }
@@ -956,6 +982,47 @@ addEventListener('keydown', e => {
   }
   if (e.code === 'Space') e.preventDefault();
 });
+// F: lean on the wall beside you, or step away from it.
+function leanKey() {
+  if (me.wl) { leanEnd(); return; }
+  if (!me.ground || stance === 2 || slideT > 0 || phase !== 'play') return;
+  const wl = findWall(me, BOXES);
+  if (!wl) return;
+  me.wl = wl; me.pk = 0; leanT = nowS(); leaveT = 0;
+  if (leanUses < 5) store.set('hanpan-lean', ++leanUses);
+  noiseSfx(0.16, 420, 0.08);
+}
+function leanEnd() {
+  if (leanKnelt) { leanKnelt = false; stance = 0; stanceT = nowS(); }
+  me.wl = me.pk = 0;
+}
+// One frame against the wall. Takes the wished direction; returns the direction to move, or null when the player left the wall.
+function leanMove(ix, iz, dt) {
+  const w = WALL[me.wl], T = alongWall(w), reach = nowS() - leanT < 0.6 ? 0.65 : 0.35;   // the first moments are spent getting there
+  const into = ix * w[0] + iz * w[1];
+  leaveT = into < -0.75 ? leaveT + dt : 0;
+  if (!me.ground || stance === 2 || me.cr === 2 || slideT > 0 || leaveT > 0.15 || !wallAt(me, me.wl, BOXES, reach)) { leanEnd(); return null; }
+  const ends = (side, d) => !wallAt(me, me.wl, BOXES, reach, side * d);
+  const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw), face = fx * w[0] + fz * w[1], look = fx * T[0] + fz * T[1], aimIn = ads || aiming;
+  const want = ix * T[0] + iz * T[1];
+  let move = Math.abs(want) > 0.35 ? want : 0, out = 0;
+  // low wall: stay down behind it, rise to look over
+  const low = lowWall(me, me.wl, BOXES, reach), rise = low && !move && (into > 0.5 || (aimIn && face > 0.5));
+  if (low) { leanKnelt = true; stance = rise ? 0 : 1; } else if (leanKnelt) { leanKnelt = false; stance = 0; }
+  if (move && ends(Math.sign(move), 0.34)) { out = Math.sign(move); move = 0; }
+  else if (!move && aimIn && !rise && face > -0.5) {   // aiming near a corner: go to the corner and lean out
+    const sides = [1, -1].filter(q => ends(q, 0.9) && q * look > -0.35);
+    const q = me.pk && sides.includes(Math.sign(me.pk)) ? Math.sign(me.pk) : sides.length > 1 ? (look < 0 ? -1 : 1) : sides[0];
+    if (q) { if (ends(q, 0.34)) out = q; else move = q; }
+  }
+  if (!move) {
+    for (const q of [1, -1]) if (ends(q, 0.28) && !ends(-q, 0.4)) move = -q * 0.5;   // no elbow past the corner
+    if (!move) { me.vx *= Math.abs(w[0]); me.vz *= Math.abs(w[1]); }
+  }
+  const to = out ? out * peekRoom(me, me.wl, out, BOXES) : 0;
+  me.pk += clamp(to - me.pk, -dt * 6, dt * 6);
+  return [T[0] * move + w[0] * 0.6, T[1] * move + w[1] * 0.6];
+}
 // C: kneel or stand up. While sprinting it becomes a slide that ends on one knee.
 function kneelKey() {
   if (stance === 0 && K.ShiftLeft && K.KeyW && me.ground && Math.hypot(me.vx, me.vz) > 5.8 && nowS() > slideNext) {
@@ -1297,20 +1364,25 @@ function updateLocal(dt, t) {
     const f = (K.KeyW ? 1 : 0) - (K.KeyS ? 1 : 0), s = (K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0);
     let ix = -Math.sin(me.yaw) * f + Math.cos(me.yaw) * s, iz = -Math.cos(me.yaw) * f - Math.sin(me.yaw) * s;
     const l = Math.hypot(ix, iz); if (l > 1) { ix /= l; iz /= l; }
-    if (stance === 1 && K.ShiftLeft && f > 0 && slideT <= 0 && !holdKneel && t - stanceT > 0.4) setStance(0);   // sprinting stands up
+    const onWall = me.wl ? leanMove(ix, iz, dt) : null;
+    if (onWall) [ix, iz] = onWall;
+    if (!me.wl && stance === 1 && K.ShiftLeft && f > 0 && slideT <= 0 && !holdKneel && t - stanceT > 0.4) setStance(0);   // sprinting stands up
     me.cr = fitStance(me, stance, BOXES);
     if (slideT > 0) {
       slideT -= dt;
       if (Math.hypot(me.vx, me.vz) < 2.5 || !me.ground) slideT = 0;
       ix = slideDir[0]; iz = slideDir[1];
     }
-    const sprint = K.ShiftLeft && f > 0 && !me.cr && !ads && !trigger && !aiming;
-    const speed = slideT > 0 ? PHYS.crouch + (PHYS.slide - PHYS.crouch) * Math.min(1, slideT / 0.45) : me.cr === 2 ? PHYS.prone : me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
-    if (K.Space && me.ground && !me.cr && !stance) { me.vy = PHYS.jump; me.ground = false; }
+    const sprint = K.ShiftLeft && f > 0 && !me.wl && !me.cr && !ads && !trigger && !aiming;
+    const speed = me.wl ? PHYS.lean : slideT > 0 ? PHYS.crouch + (PHYS.slide - PHYS.crouch) * Math.min(1, slideT / 0.45) : me.cr === 2 ? PHYS.prone : me.cr ? PHYS.crouch : ads ? PHYS.ads * (W.slot === 2 ? 1.3 : 1) : sprint ? PHYS.sprint : PHYS.walk;
+    if (K.Space && me.ground && !me.cr && !stance && !me.wl) { me.vy = PHYS.jump; me.ground = false; }
     step(me, ix, iz, speed, dt, BOXES);
-    eyeH += (stanceEye(me.cr) - eyeH) * Math.min(1, dt * 12);
+    const lo = leanOff(me);
+    eyeH += (stanceEye(me.cr) + lo.y - eyeH) * Math.min(1, dt * 12);
+    leanX += (lo.x - leanX) * Math.min(1, dt * 20); leanZ += (lo.z - leanZ) * Math.min(1, dt * 20);
+    leanK += ((me.wl && !ads && !trigger && Math.abs(me.pk) < 0.3 && !aiming ? 1 : 0) - leanK) * Math.min(1, dt * 9);
     const hs = Math.hypot(me.vx, me.vz);
-    if (me.ground && hs > 1) { bobT += dt * hs * 1.7; stepAcc += hs * dt; if (stepAcc > (sprint ? 2.4 : 1.9) && !me.cr) { stepAcc = 0; noiseSfx(0.07, 700, 0.05); } }
+    if (me.ground && hs > 1) { bobT += dt * hs * 1.7; stepAcc += hs * dt; if (stepAcc > (sprint ? 2.4 : 1.9) && !me.cr) { stepAcc = 0; if (!me.wl) noiseSfx(0.07, 700, 0.05); } }
     adsT += ((ads && reloadT <= 0 && !sprint ? 1 : 0) - adsT) * Math.min(1, dt * (cur === 'sniper' ? 7 : 11));
     bloom = Math.max(0, bloom - dt * 0.12);
     const rec = Math.min(recoilDebt, dt * 0.35); me.pitch -= rec; recoilDebt -= rec;
@@ -1319,10 +1391,10 @@ function updateLocal(dt, t) {
     inputAcc += dt;
     if (inputAcc >= 0.05) {
       inputAcc = 0;
-      send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr });
+      send({ t: 'in', sp, x: +me.x.toFixed(3), y: +me.y.toFixed(3), z: +me.z.toFixed(3), yaw: +me.yaw.toFixed(4), pitch: +me.pitch.toFixed(4), cr: me.cr, wl: me.wl || undefined, pk: me.wl ? +me.pk.toFixed(2) : undefined });
     }
-    cam.position.set(me.x, me.y + eyeH + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z);
-    cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004 + Math.min(1, Math.max(0, slideT) * 4) * 0.06);
+    cam.position.set(me.x + leanX, me.y + eyeH + Math.sin(bobT * 2) * 0.025 * (1 - adsT), me.z + leanZ);
+    cam.rotation.set(me.pitch + rnd(-shake, shake), me.yaw + rnd(-shake, shake), Math.sin(bobT) * 0.004 + Math.min(1, Math.max(0, slideT) * 4) * 0.06 - (leanX * Math.cos(me.yaw) - leanZ * Math.sin(me.yaw)) * 0.2);
   } else if (deathAt) {
     adsT = 0; trigger = false;
     const k = others.get(killer);
@@ -1342,9 +1414,9 @@ function updateLocal(dt, t) {
     const bob = 1 - adsT;
     vm.g.position.lerpVectors(vm.hip, vm.ads, adsT);
     vm.g.position.x += (Math.sin(bobT) * 0.012 - sway.x) * bob;
-    vm.g.position.y += (-Math.abs(Math.cos(bobT)) * 0.01 + sway.y) * bob - sw * 0.3 - rl * 0.12;
+    vm.g.position.y += (-Math.abs(Math.cos(bobT)) * 0.01 + sway.y) * bob - sw * 0.3 - rl * 0.12 - leanK * 0.03;
     vm.g.position.z += kick.z;
-    vm.g.rotation.set(kick.r + rl * 0.7, -sway.x * 2 * bob + rl * 0.3, -rl * 0.25);
+    vm.g.rotation.set(kick.r + rl * 0.7 + leanK * 0.5, -sway.x * 2 * bob + rl * 0.3, -rl * 0.25 + leanK * 0.15);   // held close to the chest on a wall
     muzzle.position.copy(vm.muzzle).applyEuler(vm.g.rotation).add(vm.g.position);
     muzzle.scale.setScalar(W.slot === 2 ? 0.12 : 0.2);
   }
@@ -1364,8 +1436,9 @@ function updateHud(dt, t) {
   const E = EQUIP[act.eq];
   const live = act.eq === 'charge' && myCharge();
   setText('eqN', live ? 'Charge set: G to blow it' : E.name + ' × ' + srv.eq + '  [G]'); $('eqN').classList.toggle('out', !srv.eq && !live);
-  setText('stance', ['', 'Kneeling', 'Lying down'][me.cr]);
-  setText('aimHint', aiming ? 'Release G to throw. Right click to cancel.' : '');
+  setText('stance', me.wl ? (Math.abs(me.pk) > 0.3 ? 'Leaning out' : 'Against a wall') : ['', 'Kneeling', 'Lying down'][me.cr]);
+  if (t > nearAt) { nearAt = t + 0.15; nearWall = leanUses < 5 && srv.al && !me.wl && me.ground && stance !== 2 && Math.hypot(me.vx, me.vz) < 5.5 ? findWall(me, BOXES) : 0; }
+  setText('aimHint', aiming ? 'Release G to throw. Right click to cancel.' : me.wl && srv.al && t - leanT < 6 ? (leanKnelt ? 'Right click or push into the wall: look over. ' : '') + 'A / D at a corner, or right click: lean out. F: step away.' : nearWall ? 'F: lean on the wall' : '');
   updateArc();
   const blindT = blindEnd - t;
   $('blind').style.opacity = srv.al && blindT > 0 ? Math.min(1, blindT / Math.max(0.6, blindMax * 0.6)) : 0;

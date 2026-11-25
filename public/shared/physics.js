@@ -15,6 +15,7 @@ export const PHYS = {
   hp: 0.6,        // lying height
   eyep: 0.42,
   prone: 1.3,
+  lean: 1.9,      // sliding along a wall
   slide: 8.5,
   ads: 3,
   step: 0.5,      // auto step-up height
@@ -27,6 +28,51 @@ export const stanceEye = cr => (cr === 2 ? PHYS.eyep : cr ? PHYS.eyec : PHYS.eye
 export function fitStance(p, want, boxes) {
   for (let c = want; c < 2; c++) if (c >= (p.cr | 0) || !hits(p.x, p.y + 0.002, p.z, stanceH(c), boxes)) return c;
   return 2;
+}
+
+// Leaning on a wall. wl: 0 none, else which way the wall lies (see WALL). pk: -1..1, how far head and chest lean out
+// along the wall; + is to the right of someone who faces it. A leaning, kneeling player also keeps the head down.
+export const WALL = [null, [1, 0], [-1, 0], [0, 1], [0, -1]];
+export const PEEK = 0.6;          // metres the head moves out
+const TUCK = 0.4, FLAT = { x: 0, y: 0, z: 0 };
+export const alongWall = w => [-w[1], w[0]];
+// Where the head is, compared to just standing there.
+export function leanOff(s) {
+  const w = s.cr === 2 ? null : WALL[s.wl | 0];
+  if (!w) return FLAT;
+  const k = s.pk || 0, a = Math.abs(k);
+  return { x: -w[1] * k * PEEK, y: -0.08 * a - (s.cr ? TUCK * (1 - a) : 0), z: w[0] * k * PEEK };
+}
+export function eyeOf(s) {
+  const l = leanOff(s);
+  return [s.x + l.x, s.y + stanceEye(s.cr) + l.y, s.z + l.z];
+}
+// Something solid on the wl side between y0 and y1 above the feet, at most reach away from the body, off metres along the wall.
+function boxBeside(p, wl, boxes, reach, off, y0, y1) {
+  const [wx, wz] = WALL[wl], a = PHYS.r - 0.1, b = PHYS.r + reach;
+  const x = p.x - wz * off, z = p.z + wx * off, xa = x + wx * a, xb = x + wx * b, za = z + wz * a, zb = z + wz * b;
+  const x0 = Math.min(xa, xb) - 0.01, x1 = Math.max(xa, xb) + 0.01, z0 = Math.min(za, zb) - 0.01, z1 = Math.max(za, zb) + 0.01;
+  return findBox(boxes, (x0 + x1) / 2, (z0 + z1) / 2, 0.8, q => x1 > q.min[0] && x0 < q.max[0] && z1 > q.min[2] && z0 < q.max[2] && p.y + y1 > q.min[1] && p.y + y0 < q.max[1]);
+}
+export const wallAt = (p, wl, boxes, reach = 0.35, off = 0) => boxBeside(p, wl, boxes, reach, off, 0.66, 0.7);
+// Low enough to shoot over when standing up.
+export const lowWall = (p, wl, boxes, reach = 0.35) => !boxBeside(p, wl, boxes, reach, 0, 1.45, 1.6);
+// The wall to lean on from here, or 0. Near walls first, and those in front of or behind the player.
+export function findWall(p, boxes, reach = 0.6) {
+  let best = 0, bs = Infinity;
+  for (let wl = 1; wl <= 4; wl++) {
+    const b = wallAt(p, wl, boxes, reach);
+    if (!b || !wallAt(p, wl, boxes, reach, 0.15) || !wallAt(p, wl, boxes, reach, -0.15)) continue;
+    const [wx, wz] = WALL[wl], gap = wx > 0 ? b.min[0] - p.x : wx < 0 ? p.x - b.max[0] : wz > 0 ? b.min[2] - p.z : p.z - b.max[2];
+    const look = -Math.sin(p.yaw) * wx - Math.cos(p.yaw) * wz, score = gap - (look > 0 ? look : -look * 0.8) * 0.4;
+    if (score < bs) { bs = score; best = wl; }
+  }
+  return best;
+}
+// How far (0..1) the head can lean out to one side before it meets something.
+export function peekRoom(p, wl, side, boxes) {
+  const [tx, tz] = alongWall(WALL[wl]);
+  return Math.max(0, Math.min(1, (rayMap([p.x, p.y + stanceEye(p.cr) - 0.1, p.z], [tx * side, 0, tz * side], boxes, PEEK + 0.25) - 0.25) / PEEK));
 }
 
 // Big lands sort their boxes into square cells, so only the near ones are tested. Without a grid every box is.
@@ -150,8 +196,8 @@ const nadeHit = (x, y, z, boxes) => !!findBox(boxes, x, z, NADE_R, b =>
   x + NADE_R > b.min[0] && x - NADE_R < b.max[0] && y + NADE_R > b.min[1] && y - NADE_R < b.max[1] && z + NADE_R > b.min[2] && z - NADE_R < b.max[2]);
 // Where a throw starts, rounded like the message that tells the clients about it.
 export function nadeStart(p, yaw, pitch, E) {
-  const d = dirFrom(yaw, pitch), v = E.speed || 15, R = x => Math.round(x * 100) / 100;
-  return { x: R(p.x), y: R(p.y + Math.max(0.3, stanceEye(p.cr) - 0.1)), z: R(p.z), vx: R(d[0] * v), vy: R(d[1] * v + v / 6), vz: R(d[2] * v) };
+  const d = dirFrom(yaw, pitch), v = E.speed || 15, R = x => Math.round(x * 100) / 100, e = eyeOf(p);
+  return { x: R(e[0]), y: R(Math.max(p.y + 0.3, e[1] - 0.1)), z: R(e[2]), vx: R(d[0] * v), vy: R(d[1] * v + v / 6), vz: R(d[2] * v) };
 }
 // Returns true when it touched something.
 export function stepNade(n, dt, boxes) {
@@ -187,8 +233,18 @@ export function hitbox(o, d, s) {
     for (const [f, w] of LYING) body = Math.min(body, at(f, w, 0, 0.42));
     return head <= body ? { t: head, head: head < Infinity } : { t: body, head: false };
   }
+  if (s.wl) return leanBox(o, d, s);
   const h = s.cr ? PHYS.hc : PHYS.h;
   const head = rayBox(o, d, [s.x - 0.17, s.y + h - 0.32, s.z - 0.17], [s.x + 0.17, s.y + h + 0.02, s.z + 0.17]);
   const body = rayBox(o, d, [s.x - 0.3, s.y, s.z - 0.3], [s.x + 0.3, s.y + h - 0.32, s.z + 0.3]);
   return head <= body ? { t: head, head: true } : { t: body, head: false };
+}
+// Leaning on a wall: pressed flat against it, with chest and head leaning out.
+function leanBox(o, d, s) {
+  const [wx, wz] = WALL[s.wl], l = leanOff(s), h = stanceH(s.cr) + l.y, hip = Math.min(0.9, h * 0.5);
+  const at = (k, hx, hz, y0, y1) => rayBox(o, d, [s.x + l.x * k + wx * 0.12 - hx, s.y + y0, s.z + l.z * k + wz * 0.12 - hz], [s.x + l.x * k + wx * 0.12 + hx, s.y + y1, s.z + l.z * k + wz * 0.12 + hz]);
+  const flatX = wx ? 0.2 : 0.3, flatZ = wz ? 0.2 : 0.3;
+  const head = rayBox(o, d, [s.x + l.x - 0.17, s.y + h - 0.32, s.z + l.z - 0.17], [s.x + l.x + 0.17, s.y + h + 0.02, s.z + l.z + 0.17]);
+  const body = Math.min(at(0, flatX, flatZ, 0, hip), at(0.5, flatX, flatZ, hip, h - 0.32));
+  return head <= body ? { t: head, head: head < Infinity } : { t: body, head: false };
 }

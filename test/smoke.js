@@ -11,7 +11,7 @@ import { getMap, addCity, isReady, randomMap, MAP_IDS, MAP_LIST } from '../publi
 import { REAL } from '../public/shared/realcities.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
 import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
-import { hits, hitbox, rayMap, stanceH, fitStance, step, PHYS } from '../public/shared/physics.js';
+import { hits, hitbox, rayMap, stanceH, fitStance, step, eyeOf, wallAt, lowWall, findWall, peekRoom, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -340,6 +340,45 @@ for (const id of MAP_IDS) {
     const b = [...room.players.values()].find(p => p.bot && p.alive); if (b) { b.ai.blind = 2; b.ai.target = 1; room.bot(b, 1 / 30); assert.equal(b.ai.target, 0); } }
   performance.now = realNow;
   console.log('ok  stances, flash, fire, remote charge, bots kneel and throw');
+}
+
+// 8b) Leaning on walls
+{
+  const realNow = performance.now.bind(performance);
+  let fake = realNow();
+  performance.now = () => fake;
+  const wall = [{ min: [-2, 0, -1], max: [2, 3, 0] }], low = [{ min: [-2, 0, -1], max: [2, 1.2, 0] }], curb = [{ min: [-2, 0, -1], max: [2, 0.4, 0] }];
+  const at = (x, o) => ({ x, y: 0, z: 0.36, yaw: 0, cr: 0, wl: 4, pk: 0, ...o });
+  // which walls count
+  assert.equal(findWall(at(0), wall), 4); assert.equal(findWall(at(0, { z: 0.8 }), wall), 4); assert.equal(findWall(at(0, { z: 2 }), wall), 0, 'too far'); assert.equal(findWall(at(0), curb), 0, 'too low'); assert.equal(findWall(at(2.2), wall), 0, 'past the end');
+  assert.ok(!lowWall(at(0), 4, wall) && lowWall(at(0), 4, low)); assert.ok(wallAt(at(1.7), 4, wall, 0.35, 0.2) && !wallAt(at(1.7), 4, wall, 0.35, 0.4));
+  // the head goes to the right of someone who faces the wall, and not through things
+  assert.ok(eyeOf(at(0, { pk: 1 }))[0] > 0.5 && eyeOf(at(0, { pk: -1 }))[0] < -0.5);
+  assert.equal(peekRoom(at(0), 4, 1, wall), 1); assert.ok(peekRoom(at(0), 4, 1, [...wall, { min: [0.6, 0, 0], max: [1, 3, 2] }]) < 0.7); assert.equal(peekRoom(at(0), 4, 1, [...wall, { min: [0.36, 0, 0], max: [1, 3, 2] }]) > 0.2, false);
+  // only head and chest show past the corner; kneeling behind a low wall shows nothing
+  const shot = (s, x, y) => Math.min(hitbox([x, y, -10], [0, 0, 1], s).t, 1e9) < rayMap([x, y, -10], [0, 0, 1], wall);
+  assert.ok(shot(at(1.66, { pk: 1 }), 2.26, 1.5), 'the head shows'); assert.ok(!shot(at(1.66, { pk: 1 }), 2.26, 0.5), 'the legs do not'); assert.ok(!shot(at(1.66), 2.1, 1.5), 'tucked in');
+  assert.ok(hitbox([0, 1, 10], [0, 0, -1], at(0, { wl: 0, cr: 1 })).t < 99); assert.equal(hitbox([0, 1, 10], [0, 0, -1], at(0, { cr: 1 })).t, Infinity, 'head down');
+  assert.equal(hitbox([10, 1.2, 0.62], [-1, 0, 0], at(0)).t, Infinity, 'flat against the wall');
+  // the server believes it only beside a wall
+  const room = new Room({ minPlayers: 0 }), got = [];
+  const p = room.players.get(room.addPlayer('A', 'rifle', m => got.push(m)));
+  const tell = o => { fake += 200; room.onMessage(p.id, { t: 'in', sp: p.sp, x: p.x, y: 0, z: p.z, yaw: p.yaw, pitch: 0, cr: 0, ...o }); };
+  Object.assign(p, { x: -7.1, z: 34, y: 0 }); tell({ wl: 4, pk: 1 }); assert.equal(p.wl, 0); assert.equal(p.pk, 0);
+  Object.assign(p, { x: 6.5, y: 0, z: 5.56 }); tell({ wl: 4, pk: 1 }); assert.equal(p.wl, 4); assert.equal(p.pk, 1);
+  const e = eyeOf(p); p.next = 0; room.fire(p, p.yaw, 0);
+  room.snapshot(fake / 1000); assert.deepEqual(got.filter(m => m.t === 's').at(-1).ps[0].slice(10), [4, 1], 'everyone sees it'); assert.ok(e[0] > 7);
+  for (const bad of [9, 'x', {}, -1, 1.5, true]) { tell({ wl: bad, pk: 1 }); assert.equal(p.wl, 0); }
+  for (const bad of ['x', {}, NaN, null]) { tell({ wl: 4, pk: bad }); assert.equal(p.wl, 4); assert.equal(p.pk, 0); }
+  tell({ wl: 4, pk: 99 }); assert.equal(p.pk, 1); tell({ wl: 4, cr: 2 }); assert.equal(p.wl, 0, 'not while lying');
+  // shots leave from the leaning head, and come back to it
+  const f = room.players.get(room.addPlayer('B', 'rifle', () => {}));
+  const duel = (by, to, yaw) => { Object.assign(p, { x: 6.86, y: 0, z: 5.56, cr: 0, hp: 100, prot: 0, hist: [], next: 0, yaw: 0 }); Object.assign(f, { x: 7.46, y: 0, z: -4, cr: 0, hp: 100, prot: 0, hist: [], next: 0, yaw: Math.PI }); room.fire(by, yaw, 0); return 100 - to.hp; };
+  tell({ wl: 4, pk: 0 }); Object.assign(p, { x: 6.86, z: 5.56, wl: 4, pk: 0 });
+  assert.equal(duel(p, f, 0), 0, 'the wall is in the way'); assert.equal(duel(f, p, Math.PI), 0, 'and protects');
+  p.pk = 1; assert.ok(duel(p, f, 0) > 0, 'around the corner'); assert.ok(duel(f, p, Math.PI) > 0, 'a head that looks out can be hit');
+  performance.now = realNow;
+  console.log('ok  leaning on walls: where, corner, low wall, hit areas, server checks');
 }
 
 // 9) Real server: two clients join, receive snapshots, see each other in the roster

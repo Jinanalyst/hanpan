@@ -1,7 +1,7 @@
 // Authoritative match logic. Isomorphic: the Node server runs it for online play,
 // the browser runs the same code for offline practice.
 import { getMap, randomRoute } from './map.js';
-import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
+import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceH, stanceEye, fitStance, leanOff, eyeOf, wallAt, peekRoom, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS, EQUIP, SIDEARMS, isPrimary, isSidearm, isEquip, damageAt } from './weapons.js';
 import { packGear, unpackGear, randomGear } from './gear.js';
 import { PACKET } from './adpcm.js';
@@ -68,7 +68,7 @@ export class Room {
     const p = {
       id, name: bot ? name : cleanName(name), team, bot, send: send || (() => {}), owned: bot ? 'all' : owned,
       lo: 'rifle', sa: 'pistol', eq: 'frag', eqN: 0, eqNext: 0, healT: 0, want: null, gear: packGear(unpackGear(kit.gear)), k: 0, d: 0,
-      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, crT: 0, yaw: 0, pitch: 0,
+      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, crT: 0, wl: 0, pk: 0, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
       sendBin: null, chatN: CHAT_BURST, chatAt: now(), voiceN: VOICE_PER_SEC, voiceAt: now(),
@@ -137,7 +137,7 @@ export class Room {
     }
     Object.assign(p, p.want);
     Object.assign(p, {
-      x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, cr: 0, crT: 0, ground: true,
+      x: best[0], y: 0, z: best[1], vx: 0, vy: 0, vz: 0, cr: 0, crT: 0, wl: 0, pk: 0, ground: true,
       yaw: best[2] ?? (p.team === 'red' ? Math.PI : 0), pitch: 0, hp: 100, alive: true, prot: PROTECT,
       w: p.lo, rlT: 0, next: 0, hist: [], eqN: EQUIP[p.eq].n, eqNext: 0, healT: 0,
     });
@@ -172,6 +172,11 @@ export class Room {
         p.yaw = wrapA(+m.yaw || 0);
         p.pitch = clampN(+m.pitch || 0, -1.5, 1.5);
         if (cr !== p.cr && t - p.crT > 0.15) { p.cr = cr; p.crT = t; }   // no flickering between stances to dodge shots
+        // leaning counts only beside a real wall, and the head never goes through something
+        const wl = [1, 2, 3, 4].includes(m.wl) && p.cr !== 2 && wallAt(p, m.wl, this.map.boxes, 0.45) ? m.wl : 0;
+        const pk = wl ? clampN(+m.pk || 0, -1, 1) : 0, was = wl === p.wl ? p.pk : 0, can = pk || was ? peekRoom(p, wl, Math.sign(pk || was), this.map.boxes) : 0;
+        p.wl = wl;
+        p.pk = clampN(clampN(pk, was - 8 * dt, was + 8 * dt), -can, can);
         break;
       }
       case 'f': this.fire(p, +m.yaw, +m.pitch); break;
@@ -225,7 +230,7 @@ export class Room {
     p.mag[p.w]--;
     p.next = t + W.rate * 0.9;
     p.prot = 0;
-    const o = [p.x, p.y + stanceEye(p.cr), p.z];
+    const o = eyeOf(p);
     // lag compensation: test targets where the shooter saw them
     const rt = t - (p.bot ? 0 : Math.min(0.3, p.ping / 2 + 0.1));
     const targets = [];
@@ -345,7 +350,7 @@ export class Room {
   dazzle(n, E) {
     for (const q of this.victims(n)) {
       if (q.prot > 0) continue;
-      const eye = [q.x, q.y + stanceEye(q.cr), q.z], d = [n.x - eye[0], n.y + 0.2 - eye[1], n.z - eye[2]], L = Math.hypot(...d) || 0.01;
+      const eye = eyeOf(q), d = [n.x - eye[0], n.y + 0.2 - eye[1], n.z - eye[2]], L = Math.hypot(...d) || 0.01;
       if (L > E.radius || !this.clear(eye, [n.x, n.y + 0.2, n.z])) continue;
       const look = dirFrom(q.yaw, q.pitch), dot = (look[0] * d[0] + look[1] * d[1] + look[2] * d[2]) / L;
       const sec = E.blind * (1 - L / E.radius * 0.7) * (dot > 0.35 ? 1 : dot > -0.2 ? 0.6 : 0.25);
@@ -360,7 +365,7 @@ export class Room {
     for (const q of this.victims(n)) {       // your own bomb can hurt you, not your team
       if (this.phase !== 'play') return;
       let near = Infinity;
-      for (const h of [0.3, 0.9, 1.5].slice(0, 3 - q.cr)) {
+      for (const h of [0.3, 0.9, 1.5].filter(h => h < stanceH(q.cr) + leanOff(q).y)) {
         const at = [q.x, q.y + h, q.z], L = Math.hypot(at[0] - o[0], at[1] - o[1], at[2] - o[2]);
         if (L < near && L < E.radius && this.clear(o, at)) near = L;
       }
@@ -398,7 +403,7 @@ export class Room {
       const a = h[i - 1], b = h[i];
       if (a.t <= t) {
         const k = (t - a.t) / ((b.t - a.t) || 1);
-        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, yaw: b.yaw, cr: b.cr };
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, yaw: b.yaw, cr: b.cr, wl: b.wl, pk: a.wl === b.wl ? a.pk + (b.pk - a.pk) * k : b.pk };
       }
     }
     return h[0];
@@ -473,7 +478,7 @@ export class Room {
         p.mag[p.w] += n; p.res[p.w] -= n;
       }
       if (p.bot && this.phase === 'play') this.bot(p, dt);
-      p.hist.push({ t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, cr: p.cr });
+      p.hist.push({ t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, cr: p.cr, wl: p.wl, pk: p.pk });
       while (p.hist.length && p.hist[0].t < t - 1) p.hist.shift();
     }
     this.pingAcc += dt;
@@ -484,7 +489,11 @@ export class Room {
 
   snapshot(t) {
     const ps = [];
-    for (const p of this.players.values()) ps.push([p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.cr, p.alive ? 1 : 0, p.w, p.team === 'red' ? 0 : 1]);
+    for (const p of this.players.values()) {
+      const a = [p.id, r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.pitch), p.cr, p.alive ? 1 : 0, p.w, p.team === 'red' ? 0 : 1];
+      if (p.wl) a.push(p.wl, r2(p.pk));
+      ps.push(a);
+    }
     const base = { t: 's', ts: t, ps, sc: [this.score.red, this.score.blue], tl: Math.ceil(this.timeLeft), ph: this.phase };
     for (const p of this.players.values()) {
       if (p.bot) continue;
@@ -499,7 +508,9 @@ export class Room {
   // ---- bots ----
   bot(b, dt) {
     const a = b.ai;
-    const eh = stanceEye(b.cr), o = [b.x, b.y + eh, b.z], mid = q => [1.3, 0.9, 0.25][q.cr];
+    const eh = stanceEye(b.cr), o = [b.x, b.y + eh, b.z];
+    // the spot to look for and aim at: the chest, or the head of someone who leans out from a wall
+    const spot = q => { const l = leanOff(q), out = Math.abs(q.pk) > 0.3; return [q.x + l.x, q.y + (out ? stanceEye(q.cr) - 0.1 : [1.3, 0.9, 0.25][q.cr]) + l.y, q.z + l.z]; };
     a.scan -= dt;
     a.bombT -= dt;
     if (a.blind > 0) { a.blind -= dt; a.scan = 0.1; a.target = 0; }
@@ -511,7 +522,7 @@ export class Room {
         const dx = q.x - b.x, dz = q.z - b.z, d = Math.hypot(dx, dz);
         if (d > bd) continue;
         if (Math.abs(wrapA(Math.atan2(-dx, -dz) - b.yaw)) > 1.6 && a.hurtBy !== q.id) continue;
-        const c = [q.x, q.y + mid(q), q.z], dir = [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
+        const c = spot(q), dir = [c[0] - o[0], c[1] - o[1], c[2] - o[2]];
         const L = Math.hypot(dir[0], dir[1], dir[2]);
         dir[0] /= L; dir[1] /= L; dir[2] /= L;
         if (rayMap(o, dir, this.map.boxes, L) < L - 0.2 || this.smoked(o, c)) continue;
@@ -524,8 +535,8 @@ export class Room {
     const tq = a.target && this.players.get(a.target);
     let ix = 0, iz = 0, speed = PHYS.walk;
     if (tq && tq.alive) {
-      const dx = tq.x - b.x, dz = tq.z - b.z, d = Math.hypot(dx, dz);
-      const ty = Math.atan2(-dx, -dz), tp = Math.atan2(tq.y + mid(tq) - (b.y + eh), d);
+      const c = spot(tq), dx = c[0] - b.x, dz = c[2] - b.z, d = Math.hypot(dx, dz);
+      const ty = Math.atan2(-dx, -dz), tp = Math.atan2(c[1] - (b.y + eh), d);
       b.yaw = wrapA(b.yaw + clampN(wrapA(ty - b.yaw), -4 * dt, 4 * dt));
       b.pitch += clampN(tp - b.pitch, -3 * dt, 3 * dt);
       if ((a.strafeT -= dt) <= 0) { a.strafeT = rnd(0.6, 1.6); a.strafe = Math.random() < 0.5 ? -1 : 1; a.kneel = d > 14 && Math.random() < 0.4; }
