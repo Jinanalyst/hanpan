@@ -1,0 +1,76 @@
+/* VOICE: military shooter, terse and readable under fire
+   IDEA: a field kit stencilled on canvas: olive panels, tan stencil type, red and blue team marks
+   PICTURE: the live 3D battlefield fills the screen; HUD stays at the edges
+   COLOUR and TYPE: olive #3b4128 panels, tan #d8c9a3 ink, red #d9452b, blue #2f7fd6; Black Ops One + Rajdhani
+   LAYOUT: full-bleed canvas, HUD corners, centred deploy card */
+:root{--olive:#2f3420;--olive2:#3b4128;--tan:#d8c9a3;--red:#d9452b;--blue:#2f7fd6;--ink:#f2eee2;color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;height:100%;overflow:hidden;background:#1d2016;color:var(--ink);font:600 16px/1.4 Rajdhani,system-ui,sans-serif}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;inset:0;pointer-events:none;user-select:none}
+#hud[hidden]{display:none}
+
+#mini{position:absolute;left:16px;top:16px;width:150px;height:150px;border-radius:50%;background:rgba(20,24,14,.55);border:2px solid rgba(216,201,163,.5)}
+#score{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font:400 22px 'Black Ops One',sans-serif}
+#score .team{min-width:64px;padding:4px 12px;text-align:center;border-radius:3px}
+#score .red{background:rgba(217,69,43,.85)}#score .blue{background:rgba(47,127,214,.85)}
+#clock{background:rgba(20,24,14,.7);padding:4px 12px;border-radius:3px;font-size:18px;font-variant-numeric:tabular-nums}
+#feed{position:absolute;right:16px;top:16px;display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:15px}
+#feed div{background:rgba(20,24,14,.6);padding:3px 10px;border-radius:3px;white-space:nowrap}
+#feed .r{color:#ff8a72}#feed .b{color:#7fb6ff}#feed .me{outline:1px solid var(--tan)}
+#feed em{font-style:normal;color:var(--tan);margin:0 6px;font-size:13px}
+
+#cross{position:absolute;left:50%;top:50%;width:0;height:0;transition:opacity .1s}
+#cross i{position:absolute;background:#fff;box-shadow:0 0 2px #000}
+#cross .u,#cross .d{width:2px;height:9px;left:-1px}#cross .l,#cross .r{height:2px;width:9px;top:-1px}
+#hitm{position:absolute;left:50%;top:50%;opacity:0}
+#hitm i{position:absolute;width:2px;height:10px;background:#fff;left:-1px;top:-5px}
+#hitm i:nth-child(1){transform:rotate(45deg) translateY(-12px)}#hitm i:nth-child(2){transform:rotate(135deg) translateY(-12px)}
+#hitm i:nth-child(3){transform:rotate(225deg) translateY(-12px)}#hitm i:nth-child(4){transform:rotate(315deg) translateY(-12px)}
+#hitm.kill i{background:var(--red);height:14px}
+#dmgdir{position:absolute;left:50%;top:50%;width:260px;height:260px;margin:-130px 0 0 -130px;border-radius:50%;opacity:0;
+  background:conic-gradient(from -20deg,rgba(255,40,20,.8) 0deg,rgba(255,40,20,0) 40deg,transparent 40deg);
+  -webkit-mask:radial-gradient(circle,transparent 58%,#000 60%,#000 68%,transparent 70%);mask:radial-gradient(circle,transparent 58%,#000 60%,#000 68%,transparent 70%)}
+#vign{position:absolute;inset:0;opacity:0;background:radial-gradient(circle,transparent 45%,rgba(160,10,0,.75))}
+#scope{position:absolute;inset:0;display:none;background:radial-gradient(circle at 50% 50%,transparent 0,transparent min(36vh,36vw),#000 calc(min(36vh,36vw) + 2px))}
+#scope::before,#scope::after{content:"";position:absolute;background:#000}
+#scope::before{left:0;right:0;top:50%;height:1px}#scope::after{top:0;bottom:0;left:50%;width:1px}
+
+#hpbox{position:absolute;left:16px;bottom:16px;background:rgba(20,24,14,.65);padding:8px 14px;border-radius:3px;min-width:210px}
+#hpN{font:400 30px 'Black Ops One',sans-serif}
+.bar{height:6px;background:rgba(255,255,255,.15);margin-top:4px}
+.bar i{display:block;height:100%;background:var(--tan);width:100%}
+#hpB{background:#7fd36b}
+#ammobox{position:absolute;right:16px;bottom:16px;background:rgba(20,24,14,.65);padding:8px 14px;border-radius:3px;text-align:right;min-width:170px}
+#wName{font-size:14px;color:var(--tan);text-transform:uppercase;letter-spacing:.04em}
+.ammo b{font:400 34px 'Black Ops One',sans-serif}.ammo span{font-size:18px;opacity:.75;margin-left:4px}
+#rlB{width:0}
+#net{position:absolute;left:16px;top:172px;font-size:13px;opacity:.75;width:150px;text-align:center}
+#center{position:absolute;left:50%;top:34%;transform:translateX(-50%);text-align:center;text-shadow:0 2px 6px #000;font-size:20px;white-space:pre-line}
+#center .big{display:block;font:400 clamp(32px,6vw,64px)/1.1 'Black Ops One',sans-serif}
+#board{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,94vw);background:rgba(20,24,14,.88);border:2px solid rgba(216,201,163,.4);padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+#board[hidden]{display:none}
+#board h3{margin:0 0 6px;font:400 20px 'Black Ops One',sans-serif}
+#board table{width:100%;border-collapse:collapse;font-size:15px}
+#board td,#board th{padding:3px 6px;text-align:left}#board td:nth-child(n+2),#board th:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}
+#board tr.me{background:rgba(216,201,163,.18)}#board .bot{opacity:.6;font-size:12px;margin-left:4px}
+@media(max-width:640px){#board{grid-template-columns:1fr}}
+
+.ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:radial-gradient(circle,rgba(20,24,14,.35),rgba(10,12,8,.85))}
+.ov[hidden]{display:none}
+.card{background:var(--olive);border:2px solid #5b6240;border-radius:4px;padding:26px 28px;width:min(440px,100%);box-shadow:0 20px 60px rgba(0,0,0,.6);max-height:100%;overflow:auto}
+.card h1{font:400 clamp(36px,8vw,52px)/1 'Black Ops One',sans-serif;margin:0;color:var(--tan)}
+.card h2{font:400 28px 'Black Ops One',sans-serif;margin:0 0 6px;color:var(--tan)}
+.tag{margin:6px 0 18px;opacity:.85}
+label,.lbl{display:block;font-size:14px;color:var(--tan);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.05em}
+input[type=text],#nameIn{width:100%;min-height:44px;font:600 17px Rajdhani,sans-serif;padding:0 12px;background:#1f2316;color:var(--ink);border:1px solid #5b6240;border-radius:3px}
+input[type=range]{width:100%;accent-color:var(--tan)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+button{min-height:44px;font:700 16px Rajdhani,sans-serif;border-radius:3px;border:1px solid #5b6240;background:#262a1b;color:var(--ink);cursor:pointer;padding:0 14px}
+.seg button[aria-pressed=true]{background:var(--tan);color:#1d2016;border-color:var(--tan)}
+.go{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:20px}
+button.primary{background:var(--red);border-color:var(--red);color:#fff}
+button:focus-visible,input:focus-visible{outline:3px solid #ffd54a;outline-offset:2px}
+#status{min-height:1.4em;margin:12px 0 0;color:#ffb39f;font-size:15px}
+details{margin-top:8px;font-size:15px}summary{cursor:pointer;color:var(--tan)}details ul{padding-left:18px;margin:8px 0}
+.small{font-size:13px;opacity:.7}.small-card{width:min(380px,100%)}

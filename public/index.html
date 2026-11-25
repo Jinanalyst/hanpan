@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HANPAN 한판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" hidden>
+  <canvas id="mini" width="300" height="300"></canvas>
+  <div id="score"><span class="team red"><b id="sR">0</b></span><span id="clock">10:00</span><span class="team blue"><b id="sB">0</b></span></div>
+  <div id="feed"></div>
+  <div id="cross"><i class="u"></i><i class="d"></i><i class="l"></i><i class="r"></i></div>
+  <div id="hitm"><i></i><i></i><i></i><i></i></div>
+  <div id="dmgdir"></div>
+  <div id="vign"></div>
+  <div id="scope"></div>
+  <div id="hpbox"><span id="hpN">100</span><div class="bar"><i id="hpB"></i></div></div>
+  <div id="ammobox"><div id="wName">Carbine</div><div class="ammo"><b id="ammoN">30</b><span id="resN">/ 150</span></div><div class="bar"><i id="rlB"></i></div></div>
+  <div id="net"></div>
+  <div id="center"></div>
+  <div id="board" hidden></div>
+</div>
+
+<div id="menu" class="ov">
+  <div class="card">
+    <h1>HANPAN</h1>
+    <p class="tag">Team deathmatch. Red versus Blue. First team to 50 kills wins.</p>
+    <label for="nameIn">Call sign</label>
+    <input id="nameIn" maxlength="16" autocomplete="off" spellcheck="false">
+    <span class="lbl">Primary weapon</span>
+    <div class="seg" id="loSeg"><button data-lo="rifle">Carbine</button><button data-lo="sniper">Marksman rifle</button></div>
+    <label for="sensIn">Mouse sensitivity <output id="sensOut"></output></label>
+    <input id="sensIn" type="range" min="0.5" max="3" step="0.1">
+    <div class="go"><button id="online" class="primary">Play online</button><button id="practice">Practice vs bots</button></div>
+    <p id="status" role="status"></p>
+    <details><summary>Controls</summary>
+      <ul><li><b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Space</b> jump</li>
+      <li><b>Left click</b> fire · <b>Right click</b> aim down sights · <b>R</b> reload</li>
+      <li><b>1 / 2</b> primary / sidearm · <b>Tab</b> scoreboard · <b>Esc</b> pause</li></ul>
+      <p class="small">Desktop with mouse and keyboard.</p>
+    </details>
+  </div>
+</div>
+
+<div id="pauseOv" class="ov" hidden>
+  <div class="card small-card">
+    <h2>Paused</h2>
+    <p>The match keeps running while you are here.</p>
+    <div class="go"><button id="resume" class="primary">Resume</button><button id="leave">Leave match</button></div>
+  </div>
+</div>
+
+<script type="module" src="client.js"></script>
+</body>
+</html>
