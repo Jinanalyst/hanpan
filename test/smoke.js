@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import { Room, cleanChat } from '../public/shared/game.js';
+import { Room, cleanChat, KILL_LIMIT } from '../public/shared/game.js';
 import { encode, decode, FRAME, PACKET, RATE } from '../public/shared/adpcm.js';
 import { getMap, MAP_IDS, MAP_LIST } from '../public/shared/map.js';
 import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js';
@@ -55,6 +55,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   console.log('ok  walls block bullets');
 }
 
+// The first team to the kill limit wins, and the menu says the same number
+{
+  const room = new Room({ minPlayers: 0 }), got = [];
+  const a = room.players.get(room.addPlayer('A', 'rifle', m => got.push(m))), b = room.players.get(room.addPlayer('B', 'rifle', () => {}));
+  assert.equal(KILL_LIMIT, 15); assert.equal(got.find(m => m.t === 'welcome').limit, 15);
+  for (let i = 1; i <= 15; i++) { assert.equal(room.phase, 'play'); room.kill(b, a, false); if (i < 15) room.spawn(b); }
+  assert.equal(room.phase, 'end'); assert.equal(got.find(m => m.t === 'end').winner, a.team);
+  assert.ok(fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').includes(`First team to ${KILL_LIMIT} kills wins`));
+  console.log('ok  match ends at 15 kills');
+}
+
 // 3) Every land: symmetric, spawns open and connected, bots get around and score kills in two simulated minutes
 for (const id of MAP_IDS) {
   const map = getMap(id);
@@ -71,7 +82,7 @@ for (const id of MAP_IDS) {
     assert.ok(!hits(x, 0, z, PHYS.h, map.boxes), `${id}: spawn ${x},${z} is open`);
     assert.ok(main.some(k => Math.hypot(points[k][0] - x, points[k][1] - z) < 5), `${id}: spawn ${x},${z} is connected`);
   }
-  const room = new Room({ minPlayers: 8, map: id });
+  const room = new Room({ minPlayers: 8, map: id, killLimit: 999 });   // long enough to measure
   assert.equal(room.map.id, id);
   room.addPlayer('Watcher', 'rifle', () => {});
   const W = room.players.get(1);
@@ -319,7 +330,7 @@ for (const id of MAP_IDS) {
   // resets clean everything
   { const { room, P: [a, b] } = make(2, 'fire'); put(a, 0, 34); put(b, 0, 10); throwAt(room, a, 0, 0.5, 20); run(room, 1); room.endMatch(); assert.equal(room.fires.length + room.nades.length, 0); }
   // bots throw, kneel and stay blind while dazzled
-  { const room = new Room({ minPlayers: 8 }); room.addPlayer('W', 'rifle', () => {}); const W = room.players.get(1); Object.assign(W, { x: 39, z: 0 });
+  { const room = new Room({ minPlayers: 8, killLimit: 999 }); room.addPlayer('W', 'rifle', () => {}); const W = room.players.get(1); Object.assign(W, { x: 39, z: 0 });
     let thrown = 0, knelt = 0; const old = room.useEquip.bind(room); room.useEquip = (p, y, q) => { const n = p.eqN; old(p, y, q); if (p.bot && p.eqN < n) thrown++; };
     for (let i = 0; i < 30 * 240; i++) { fake += 1000 / 30; room.update(1 / 30); W.prot = 99; W.hp = 100; for (const p of room.players.values()) if (p.bot && p.cr === 1) knelt++; }
     assert.ok(thrown > 2 && knelt > 30, `bots threw ${thrown} and knelt ${knelt} ticks`);

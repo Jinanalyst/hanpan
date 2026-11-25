@@ -7,7 +7,7 @@ import { packGear, unpackGear, randomGear } from './gear.js';
 import { PACKET } from './adpcm.js';
 
 export const MATCH_TIME = 600;   // seconds
-export const KILL_LIMIT = 50;
+export const KILL_LIMIT = 15;
 export const RESPAWN = 4;
 export const PROTECT = 2;        // spawn protection seconds
 const SNAP_RATE = 1 / 20;
