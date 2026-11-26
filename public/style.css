@@ -237,3 +237,4 @@ button.srv{background:none;border-color:transparent;padding:4px 8px}button.srv:h
 .fightOpts label:has(:checked){border-color:var(--tan);background:rgba(216,201,163,.12)}
 .fightOpts input{accent-color:var(--tan)}
 #fightLand{width:100%}
+.gateGo{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:8px 0}.gateGo>*{min-width:180px}

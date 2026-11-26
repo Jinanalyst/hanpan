@@ -36,16 +36,26 @@ export function walletOf(user) {
 }
 export const shortWallet = a => (a && a.length > 10 ? a.slice(0, 4) + '…' + a.slice(-4) : a || 'Wallet');
 
-export async function currentUser() {
+// A guest (anonymous login, made on the Servers page) counts as logged out everywhere else:
+// the store, the game menu and the wallet login page only know wallet players.
+export async function currentUser({ guest = false } = {}) {
   if (!maybeSignedIn()) return null;
   const { data } = await (await client()).auth.getSession();
-  return data.session?.user || null;
+  const user = data.session?.user || null;
+  return user && user.is_anonymous && !guest ? null : user;
 }
 
 export async function accessToken() {
   if (!maybeSignedIn()) return null;
   const { data } = await (await client()).auth.getSession();
-  return data.session?.access_token || null;
+  return data.session?.user?.is_anonymous ? null : data.session?.access_token || null;
+}
+
+// Servers without a wallet: an anonymous login that stays in this browser.
+export async function signInGuest() {
+  const { data, error } = await (await client()).auth.signInAnonymously();
+  if (error) throw error;
+  return data.user;
 }
 
 let ownedCache = null;

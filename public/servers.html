@@ -20,8 +20,9 @@
 
 <main id="gate" class="gate" hidden>
   <h1>Servers</h1>
-  <p>Make your own chat server and add friends by their wallet address.</p>
-  <a class="btn primary" href="login.html?next=servers">Log in with wallet</a>
+  <p>Make your own chat server, invite friends and start private fights.</p>
+  <div class="gateGo"><a class="btn primary" href="login.html?next=servers">Log in with wallet</a><button id="guestBtn" type="button">Continue as guest</button></div>
+  <p class="small">No wallet? A guest gets a friend code to share instead. Guest servers stay in this browser.</p>
 </main>
 
 <main id="app" class="chat" hidden>
@@ -31,7 +32,7 @@
     <h2>Your servers</h2>
     <ul id="serverList"></ul>
     <p id="noServers" class="small" hidden>None yet. Make one, or ask a friend to add your wallet address.</p>
-    <div class="mine"><span class="small">Your wallet address</span><code id="myWallet"></code><button id="copyBtn" type="button">Copy address</button></div>
+    <div class="mine"><span class="small" id="myLbl">Your wallet address</span><code id="myWallet"></code><button id="copyBtn" type="button">Copy address</button><p id="guestNote" class="small" hidden>You are a guest. Your servers stay in this browser: clearing site data or logging in with a wallet leaves them behind.</p></div>
   </nav>
 
   <section id="room" class="room" aria-label="Chat" hidden>
@@ -50,10 +51,10 @@
 
   <aside id="people" class="people" aria-label="People" hidden>
     <form id="addForm" hidden>
-      <label for="walletIn">Add a friend by wallet address</label>
-      <input id="walletIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="60" placeholder="Solana address">
+      <label for="walletIn">Add a friend by wallet address or friend code</label>
+      <input id="walletIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="60" placeholder="Solana address or friend code">
       <button class="primary">Add</button>
-      <p id="addNote" role="status" class="small">They see the invitation here after logging in with that wallet, and choose whether to join.</p>
+      <p id="addNote" role="status" class="small">They see the invitation the next time they open Servers, and choose whether to join.</p>
     </form>
     <h2>People <span id="count"></span></h2>
     <ul id="memberList"></ul>

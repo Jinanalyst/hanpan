@@ -1,5 +1,5 @@
 // Player-made chat servers. The database decides who may read, write and invite; this page only shows it.
-import { client, configured, currentUser, shortWallet } from './auth.js';
+import { client, configured, currentUser, shortWallet, signInGuest } from './auth.js';
 
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -12,6 +12,7 @@ const framed = window.top !== window.self;
 const COLORS = ['Red', 'Blue', 'Sand', 'Green', 'Violet', 'Teal'];
 const PAGE = 50, MAX_SHOWN = 500;
 
+let guest = false, COPY = 'Copy address';
 let sb = null, home = { wallet: '', servers: [], invites: [] }, cur = null, people = { members: [], invites: [] };
 let limit = PAGE, live = false, channel = null, shown = {}, seen = {};
 try { seen = JSON.parse(load('hanpan-seen')) || {}; } catch { /* start fresh */ }
@@ -19,7 +20,7 @@ try { seen = JSON.parse(load('hanpan-seen')) || {}; } catch { /* start fresh */ 
 const WHY = {
   not_signed_in: 'Your login has expired. Log in again.', no_wallet: 'Log in with a Solana wallet to use servers.',
   bad_name: 'The name needs 2 to 32 characters.', too_many_owned: 'You can own up to 5 servers.', too_many_joined: 'You can be in up to 30 servers.',
-  bad_wallet: 'That is not a Solana wallet address.', already_member: 'This person is already here.', already_invited: 'Already invited. They have not answered yet.',
+  bad_wallet: 'That is not a Solana wallet address or a friend code (like K7QM-2XPA).', already_member: 'This person is already here.', already_invited: 'Already invited. They have not answered yet.',
   declined: 'This person said no recently. You can ask again after a week.', server_full: 'A server holds up to 50 people, counting invitations.',
   no_invite: 'This invitation is gone.', not_member: 'You are no longer in this server.', not_owner: 'Only the owner can do that.',
   too_fast: 'Too fast. Wait a few seconds.', bad_message: 'A message needs 1 to 500 characters.', not_allowed: 'That message cannot be deleted.',
@@ -27,6 +28,7 @@ const WHY = {
 function explain(e) {
   const m = String(e?.message || e || '');
   if (WHY[m]) return WHY[m];
+  if (e?.code === 'anonymous_provider_disabled' || /anonymous sign-ins are disabled/i.test(m)) return 'Guest servers are not turned on yet. Log in with a wallet for now.';
   if (e?.code === 'PGRST202' || e?.code === 'PGRST205') return 'Servers are not set up yet.';
   if (e?.code === 'PGRST301' || e?.code === 'PGRST303' || /jwt/i.test(m)) return WHY.not_signed_in;
   return 'The chat server did not answer. Try again in a moment.';
@@ -48,6 +50,8 @@ async function act(fn, say = status) {
 
 /* ---- wallet addresses ---- */
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+// A guest's friend code, as the database makes it: XXXX-XXXX without I, O, 0 or 1.
+const isCode = s => /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/i.test(s);
 function isWallet(s) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s)) return false;
   let n = 0n;
@@ -220,8 +224,8 @@ async function tick() {
 const HINT = $('addNote').textContent;
 $('addForm').onsubmit = e => {
   e.preventDefault();
-  const w = $('walletIn').value.trim(), note = t => { $('addNote').textContent = t || HINT; }, sid = cur;
-  if (!isWallet(w)) return note(WHY.bad_wallet);
+  const raw = $('walletIn').value.trim(), w = isCode(raw) ? raw.toUpperCase() : raw, note = t => { $('addNote').textContent = t || HINT; }, sid = cur;
+  if (!isWallet(w) && !isCode(w)) return note(WHY.bad_wallet);
   act(async () => {
     await rpc('invite', { p_server: sid, p_wallet: w });
     if (sid !== cur) return;
@@ -255,7 +259,7 @@ $('backBtn').onclick = () => close('');
 $('peopleBtn').onclick = () => $('peopleBtn').setAttribute('aria-expanded', String($('app').classList.toggle('showPeople')));
 $('copyBtn').onclick = async () => {
   try { await navigator.clipboard.writeText(home.wallet); $('copyBtn').textContent = 'Copied'; } catch { $('copyBtn').textContent = 'Select and copy it above'; }
-  setTimeout(() => { $('copyBtn').textContent = 'Copy address'; }, 2000);
+  setTimeout(() => { $('copyBtn').textContent = COPY; }, 2000);
 };
 $('leaveBtn').onclick = async () => {
   const s = home.servers.find(x => x.id === cur);
@@ -369,19 +373,32 @@ function ask(text, yes) {
 }
 
 /* ---- start ---- */
+$('guestBtn').onclick = async () => {
+  if ($('guestBtn').disabled) return;
+  $('guestBtn').disabled = true;
+  try { await signInGuest(); $('gate').hidden = true; await start(); }
+  catch (e) { console.warn('[servers]', e); status(explain(e)); }
+  finally { $('guestBtn').disabled = false; }
+};
 async function start() {
   if (framed) { status('Servers do not work inside another page. Open hanpan.team directly.'); return; }
   if (!configured) { status('Servers are not set up yet.'); return; }
   let user = null;
-  try { user = await currentUser(); } catch (e) { status(explain(e)); }
-  const a = el('a', '', user ? 'Account' : 'Log in with wallet');
-  a.href = user ? 'login.html' : 'login.html?next=servers';
+  try { user = await currentUser({ guest: true }); } catch (e) { status(explain(e)); }
+  guest = !!user?.is_anonymous;
+  const a = el('a', '', user && !guest ? 'Account' : 'Log in with wallet');
+  a.href = user && !guest ? 'login.html' : 'login.html?next=servers';
   $('who').replaceChildren(a);
   if (!user) { $('gate').hidden = false; return; }
   try {
     sb = await client();
+    if (guest) await rpc('guest');   // makes this guest's friend code the first time
     await getHome();
-    a.textContent = shortWallet(home.wallet); a.title = home.wallet;
+    if (guest) {
+      $('who').prepend(el('span', 'small', 'Guest · ' + home.wallet + ' '));
+      $('myLbl').textContent = 'Your friend code'; $('copyBtn').textContent = COPY = 'Copy code';
+      $('guestNote').hidden = false;
+    } else { a.textContent = shortWallet(home.wallet); a.title = home.wallet; }
     $('app').hidden = false;
     setInterval(tick, 4000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
