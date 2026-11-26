@@ -735,7 +735,8 @@ function onMsg(m) {
     case 'rl': battle.reload(); reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
     case 'end': showEnd(m); break;
     case 'start': battle.start(); clearThrown(); setText('center', ''); break;
-    case 'deny': leaveGame(m.why === 'check' ? 'Could not check what you own. Try again in a moment.' : 'You need to own this land to play it online. It is in the Store.'); break;
+    case 'deny': leaveGame({ check: 'Could not check what you own. Try again in a moment.', fight: 'This fight link has expired. Ask for a new one.', full: 'This fight is full.' }[m.why] || 'You need to own this land to play it online. It is in the Store.'); break;
+    case 'lb': showLobby(m); break;
     case 'c': if (!muted.has(m.id)) chatLine(pname(m.id), String(m.x), m.id === myId ? 'me' : ''); break;
     case 'cx': chatLine('', 'You are sending messages too fast.', 'sys'); break;
     case 'gt': battle.thrown(m); nadeThrown(m); if (m.st) nadeStuck({ id: m.id, p: m.o }); break;
@@ -955,7 +956,14 @@ function showEnd(m) {
   c.textContent = ''; hudCache.center = null;
   const b = document.createElement('span'); b.className = 'big';
   b.textContent = m.winner === 'draw' ? 'DRAW' : mine ? 'VICTORY' : 'DEFEAT';
-  c.append(b, `Red ${m.score[0]}  :  ${m.score[1]} Blue\nNext match in 10 seconds`);
+  c.append(b, `Red ${m.score[0]}  :  ${m.score[1]} Blue\n${m.left ? 'The other team left. ' : ''}${m.fight ? 'Rematch in 10 seconds if everyone stays' : 'Next match in 10 seconds'}`);
+}
+// Private fight: who is missing before it starts.
+function showLobby(m) {
+  phase = 'wait';
+  const need = m.n * 2 - m.r - m.b, size = `${m.n} vs ${m.n}`;
+  setText('center', m.go ? `${size} · starting in ${m.go}` :
+    `Private fight ${size}\nRed ${m.r}/${m.n} · Blue ${m.b}/${m.n} · waiting for ${need} more\nPress T to change team`);
 }
 function renderBoard() {
   const el = $('board'); el.textContent = '';
@@ -1010,6 +1018,7 @@ addEventListener('keydown', e => {
   K[e.code] = true;
   if (e.code === 'Tab') { e.preventDefault(); renderBoard(); $('board').hidden = false; }
   if (e.code === 'KeyR') send({ t: 'r' });
+  if (e.code === 'KeyT' && !e.repeat && phase === 'wait') send({ t: 'tm' });   // private fight lobby: change team
   if (e.code === 'KeyG' && !e.repeat && srv.al && phase === 'play') {
     if (!EQUIP[act.eq].thrown || myCharge()) send({ t: 'g', yaw: me.yaw, pitch: me.pitch });   // med kit, or blow the charge
     else if (srv.eq > 0) { aiming = true; trigger = ads = false; }
@@ -1317,6 +1326,7 @@ function leaveGame(msg = '') {
   inGame = false; $('hud').hidden = true; $('pauseOv').hidden = true; $('menu').hidden = false; status(msg); paintLand();
   if (document.pointerLockElement) document.exitPointerLock();
   dropSoldiers(); clearThrown(); paintLo();
+  if (fightCode && !$('fightBox').hidden) checkFight();   // how many are still in the fight
 }
 $('practice').onclick = async () => {
   if (connecting) return;
@@ -1349,11 +1359,36 @@ async function prepare(id) {
   catch { status('Could not load this land. Check your connection and try again.'); if (document.pointerLockElement) document.exitPointerLock(); return false; }
   finally { connecting = false; }
 }
-$('online').onclick = async () => {
-  if (connecting || needsStore()) return;
+// A private fight link (?fight=code) from a chat server. The fight decides the land.
+const fightCode = /^[a-z0-9]{10}$/.test(new URLSearchParams(location.search).get('fight') || '') ? new URLSearchParams(location.search).get('fight') : null;
+let fight = null;
+async function checkFight() {
+  if (!fightCode) return;
+  const box = $('fightBox');
+  box.hidden = false;
+  try {
+    const r = await fetch('fight/' + fightCode, { cache: 'no-store' });
+    if (r.status === 404) { fight = null; $('fightText').textContent = 'This fight link has expired. Ask for a new one in your server.'; $('fightGo').hidden = true; return; }
+    if (!r.ok) throw new Error(r.status);
+    fight = await r.json();
+    const full = fight.players >= fight.n * 2;
+    $('fightText').textContent = `Private ${fight.n} vs ${fight.n} fight on ${fight.land} · ${fight.players} of ${fight.n * 2} here${full ? ' (full)' : ''}`;
+    $('fightGo').hidden = full;
+    if (!inGame && isMap(fight.map)) { land = fight.map; paintLand(); }
+  } catch { $('fightText').textContent = 'Could not reach the game server to check this fight. Try again in a moment.'; $('fightGo').hidden = false; }
+}
+if (fightCode) checkFight();
+$('fightGo').onclick = () => goOnline(true);
+$('fightNo').onclick = () => { history.replaceState(null, '', location.pathname); $('fightBox').hidden = true; fight = null; };
+$('online').onclick = () => goOnline(false);
+async function goOnline(private_) {
+  if (connecting) return;
+  if (private_ && !fight) { await checkFight(); if (!fight || inGame) return; }
+  if (!private_ && needsStore()) return;
   audio(); lock(); voice.ready();
   if (!/^https?:$/.test(location.protocol)) { status('Open this page from the game server to play online.'); return; }
-  if (!await prepare(land)) return;
+  const want = private_ ? fight.map : land;
+  if (!await prepare(want)) return;
   status('Connecting…');
   connecting = true;
   const token = await accessToken().catch(() => null);
@@ -1365,7 +1400,7 @@ $('online').onclick = async () => {
   const to = setTimeout(() => { if (!opened) { ws.close(); status('No game server found at this address. Try Practice, or deploy the server.'); if (document.pointerLockElement) document.exitPointerLock(); } }, 4000);
   ws.onopen = () => {
     opened = true; clearTimeout(to);
-    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo: kit().lo, sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear), map: land, token: token || undefined }));
+    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo: kit().lo, sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear), map: want, fight: private_ ? fightCode : undefined, token: token || undefined }));
     net = mine = { online: true, send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, sendBin: b => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(b); }, close: () => ws.close() };
     enterGame();
   };
@@ -1373,7 +1408,7 @@ $('online').onclick = async () => {
   ws.onmessage = e => { if (net !== mine) return; if (typeof e.data !== 'string') { voice.receive(e.data); return; } let m; try { m = JSON.parse(e.data); } catch { return; } onMsg(m); };
   ws.onclose = () => { if (inGame && mine && net === mine) leaveGame('Disconnected from the server.'); };
   ws.onerror = () => {};
-};
+}
 $('resume').onclick = () => { $('resume').blur(); lock(); };
 $('leave').onclick = () => leaveGame();
 

@@ -9,6 +9,7 @@ import { PACKET } from './adpcm.js';
 
 export const MATCH_TIME = 600;   // seconds
 export const KILL_LIMIT = 15;
+const FIGHT_COUNT = 5;            // seconds between a full private fight and the start
 export const RESPAWN = 4;
 export const PROTECT = 2;        // spawn protection seconds
 const SNAP_RATE = 1 / 20;
@@ -49,6 +50,9 @@ export class Room {
     this.fires = [];    // { x, y, z, until, by, team, next }
     this.airSeq = 1;
     this.clearAir();
+    // A private fight (fight = players per team): no bots, and the match starts once both teams are full.
+    this.fight = o.fight || 0;
+    if (this.fight) { this.minPlayers = 0; this.maxPlayers = this.fight * 2; this.phase = 'wait'; this.goT = 0; }
   }
 
   humanCount() { let n = 0; for (const p of this.players.values()) if (!p.bot) n++; return n; }
@@ -93,14 +97,19 @@ export class Room {
     for (const s of this.flights) p.send(this.flightMsg(s, t));
     this.balanceBots();
     this.roster();
+    this.lobby();
     return p.id;
   }
 
   removePlayer(id) {
+    const p = this.players.get(id);
     if (!this.players.delete(id)) return;
     for (const n of [...this.nades]) if (n.by === id) { this.dropNade(n); this.broadcast({ t: 'gx', id: n.id, w: 'fizz', p: [n.x, n.y, n.z].map(r2) }); }
     this.balanceBots();
     this.roster();
+    // In a private fight a team that has nobody left loses.
+    if (this.fight && this.phase === 'play' && this.players.size && !this.teamSize(p.team)) this.endMatch(p.team === 'red' ? 'blue' : 'red');
+    this.lobby();
   }
 
   balanceBots() {
@@ -192,7 +201,33 @@ export class Room {
       case 'g': this.useEquip(p, +m.yaw, +m.pitch); break;
       case 'c': this.chat(p, m.x); break;
       case 'po': if (Number.isFinite(m.s)) p.ping = clampN(t - m.s, 0, 1); break;
+      case 'tm': this.switchTeam(p); break;
     }
+  }
+
+  // ---- private fight lobby ----
+  full() { return this.teamSize('red') === this.fight && this.teamSize('blue') === this.fight; }
+  switchTeam(p) {
+    const to = p.team === 'red' ? 'blue' : 'red';
+    if (!this.fight || this.phase !== 'wait' || this.teamSize(to) >= this.fight) return;
+    p.team = to;
+    this.spawn(p);
+    this.roster();
+    this.lobby();
+  }
+  // Tells everyone who is still missing, and starts or stops the countdown.
+  lobby() {
+    if (!this.fight || this.phase !== 'wait') return;
+    const full = this.full();
+    if (full && this.goT <= 0) this.goT = FIGHT_COUNT;
+    if (!full) this.goT = 0;
+    this.broadcast({ t: 'lb', n: this.fight, r: this.teamSize('red'), b: this.teamSize('blue'), go: this.goT > 0 ? Math.ceil(this.goT) : 0 });
+  }
+  toLobby() {
+    this.phase = 'wait'; this.goT = 0;
+    this.nades = []; this.smokes = []; this.fires = []; this.clearAir();
+    for (const p of this.players.values()) this.spawn(p);
+    this.lobby();
   }
 
   // ---- team talk ----
@@ -519,13 +554,14 @@ export class Room {
     p.send({ t: 'rl', d: W.reload });
   }
 
-  endMatch() {
+  // win: the team that wins anyway (the other side left a private fight)
+  endMatch(win) {
     if (this.phase !== 'play') return;
     this.phase = 'end';
     this.endT = 10;
     this.nades = []; this.fires = []; this.clearAir();
     const s = this.score;
-    this.broadcast({ t: 'end', winner: s.red === s.blue ? 'draw' : s.red > s.blue ? 'red' : 'blue', score: [s.red, s.blue] });
+    this.broadcast({ t: 'end', winner: win || (s.red === s.blue ? 'draw' : s.red > s.blue ? 'red' : 'blue'), score: [s.red, s.blue], fight: this.fight ? 1 : 0, left: win ? 1 : 0 });
   }
 
   resetMatch() {
@@ -552,7 +588,12 @@ export class Room {
       if (this.timeLeft <= 0) { this.timeLeft = 0; this.endMatch(); }
     } else if (this.phase === 'end') {
       this.endT -= dt;
-      if (this.endT <= 0) this.resetMatch();
+      if (this.endT <= 0) { if (this.fight) this.toLobby(); else this.resetMatch(); }   // a private fight waits until everyone is back
+    } else if (this.phase === 'wait' && this.goT > 0) {
+      const was = Math.ceil(this.goT);
+      this.goT -= dt;
+      if (this.goT <= 0) { this.goT = 0; this.resetMatch(); }
+      else if (Math.ceil(this.goT) !== was) this.broadcast({ t: 'lb', n: this.fight, r: this.teamSize('red'), b: this.teamSize('blue'), go: Math.ceil(this.goT) });
     }
     this.updateNades(dt, t);
     if (this.map.air && this.phase === 'play') this.updateAir(t);

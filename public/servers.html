@@ -39,6 +39,7 @@
       <button id="backBtn" type="button" class="narrow">Servers</button>
       <div class="title"><h1 id="roomName"></h1><p id="roomAbout"></p></div>
       <button id="peopleBtn" type="button" class="narrow" aria-expanded="false" aria-controls="people">People</button>
+      <button id="fightBtn" type="button" class="primary">Fight</button>
       <button id="editBtn" type="button">Edit</button>
       <button id="leaveBtn" type="button">Leave</button>
     </header>
@@ -73,6 +74,18 @@
     <p id="editErr" class="err" role="alert"></p>
     <div class="go"><button class="primary" id="editOk">Create</button><button type="button" id="editNo">Cancel</button></div>
     <button type="button" id="delBtn" class="danger" hidden>Delete this server</button>
+  </form>
+</dialog>
+<dialog id="fightDlg" class="dlg" aria-labelledby="fightTitle">
+  <form id="fightForm" method="dialog">
+    <h2 id="fightTitle">Start a private fight</h2>
+    <p class="small">Only people in this server see the link. Bots stay out, and it starts once both teams are full.</p>
+    <span class="lbl" id="sizeLbl">Size</span>
+    <div class="fightOpts" role="radiogroup" aria-labelledby="sizeLbl"><label><input type="radio" name="size" value="1" checked> 1 vs 1</label><label><input type="radio" name="size" value="2"> 2 vs 2</label><label><input type="radio" name="size" value="5"> 5 vs 5</label></div>
+    <label for="fightLand">Land</label>
+    <select id="fightLand" required></select>
+    <p id="fightErr" class="err" role="alert"></p>
+    <div class="go"><button class="primary" id="fightOk">Post the fight</button><button type="button" id="fightNo">Cancel</button></div>
   </form>
 </dialog>
 <dialog id="askDlg" class="dlg" aria-labelledby="askText"><p id="askText"></p><div class="go"><button type="button" id="askYes" class="primary"></button><button type="button" id="askNo">Cancel</button></div></dialog>

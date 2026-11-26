@@ -225,3 +225,15 @@ button.srv{background:none;border-color:transparent;padding:4px 8px}button.srv:h
 /* credit for real city lands: always on top, also over the menu */
 #osm{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:20}#osm .osm{display:block;padding:1px 8px;background:rgba(255,255,255,.82);color:#16324a;font:500 12px/1.5 Rajdhani,sans-serif;text-decoration:none;border-radius:3px 3px 0 0}#osm .osm:hover{text-decoration:underline}
 @media(max-width:620px){.storeTop .brand{font-size:0}.storeTop .brand .logo{display:block;width:42px;height:42px;margin:0}}
+/* private fight: join banner on the menu, fight cards in chat */
+.fightBox{margin-top:14px;padding:12px 14px;border:1px solid var(--tan);border-radius:6px;background:rgba(216,201,163,.08)}
+.fightBox p{margin:0 0 10px;font-weight:600}
+.fightBox .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fightCard{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:4px 0;padding:10px 12px;border:1px solid var(--tan);border-radius:6px;background:rgba(216,201,163,.08)}
+.fightCard b{font-size:16px}.fightCard small{opacity:.8}
+.fightCard a.btn{margin-left:auto}
+.fightOpts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:6px 0 4px}
+.fightOpts label{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border:1px solid var(--olive2);border-radius:6px;cursor:pointer;font-weight:700}
+.fightOpts label:has(:checked){border-color:var(--tan);background:rgba(216,201,163,.12)}
+.fightOpts input{accent-color:var(--tan)}
+#fightLand{width:100%}

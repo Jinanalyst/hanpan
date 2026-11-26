@@ -457,6 +457,36 @@ for (const id of MAP_IDS) {
   console.log('ok  leaning on walls: where, corner, low wall, hit areas, server checks');
 }
 
+// Private fight room: no bots, waits for both teams, team switch, countdown, a team that leaves loses
+{
+  const room = new Room({ map: 'compound', fight: 2, killLimit: 15 }), box = new Map();
+  const add = n => { const got = []; const id = room.addPlayer(n, 'rifle', m => got.push(m), new Set()); box.set(id, got); return id; };
+  const lb = id => box.get(id).filter(m => m.t === 'lb').at(-1);
+  const a = add('A'), b = add('B'), c = add('C');
+  assert.equal(room.botCount(), 0, 'no bots in a private fight');
+  assert.equal(room.phase, 'wait');
+  assert.deepEqual([room.players.get(a).team, room.players.get(b).team, room.players.get(c).team], ['red', 'blue', 'red']);
+  room.onMessage(a, { t: 'tm' }); assert.equal(room.players.get(a).team, 'blue', 'switch to a team with room');
+  room.onMessage(c, { t: 'tm' }); assert.equal(room.players.get(c).team, 'red', 'not to a full team');
+  room.players.get(b).hp = 100; room.fire(room.players.get(b), 0, 0); assert.equal(room.players.get(b).mag.rifle, 30, 'no shooting while waiting');
+  for (let i = 0; i < 60; i++) room.update(1 / 30);
+  assert.equal(room.phase, 'wait', 'waits for the fourth');
+  const d = add('D');
+  assert.ok(lb(a).go > 0 && lb(d).r === 2 && lb(d).b === 2, 'countdown once full');
+  room.removePlayer(d); assert.equal(lb(a).go, 0, 'stops when someone leaves');
+  const e = add('E');
+  for (let i = 0; i < 30 * 6; i++) room.update(1 / 30);
+  assert.equal(room.phase, 'play', 'starts after the countdown');
+  for (const id of [a, b]) room.removePlayer(id);   // the whole blue team leaves
+  const end = box.get(c).find(m => m.t === 'end');
+  assert.deepEqual([end.winner, end.left, end.fight], ['red', 1, 1], 'the team that stayed wins');
+  for (let i = 0; i < 30 * 11; i++) room.update(1 / 30);
+  assert.equal(room.phase, 'wait', 'back to waiting after the match');
+  assert.ok([c, e].every(id => room.players.get(id).alive));
+  assert.equal(new Room({ map: 'compound' }).phase, 'play', 'public rooms are unchanged');
+  console.log('ok  private fight: no bots, lobby, team switch, countdown, leaving loses');
+}
+
 // 9) Real server: two clients join, receive snapshots, see each other in the roster
 {
   const port = 3999;
@@ -550,6 +580,37 @@ for (const id of MAP_IDS) {
     gun.ws.send('{"t":"f","yaw":{"valueOf":1,"toString":1}}'); gun.ws.send('null'); gun.ws.send('[]');
     const odd = await join({ toString: 1 }, 'frost');
     assert.ok(odd.got.find(m => m.t === 'welcome'), 'odd name accepted as default');
+    // private fights: made over HTTP, joined by code, never part of matchmaking
+    {
+      const api = (p, o) => fetch(`http://localhost:${port}${p}`, o);
+      const { lands } = await (await api('/fight/lands')).json();
+      assert.ok(lands.some(l => l.id === 'ruins') && !lands.some(l => l.id === 'palace'), 'only free lands');
+      const make = body => api('/fight', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      assert.equal((await make({ n: 3, map: 'ruins' })).status, 400);
+      assert.equal((await make({ n: '5', map: 'ruins' })).status, 400);
+      { const big = await (await make({ n: 5, map: 'ruins' })).json(); assert.equal(big.n, 5, '5 vs 5'); }
+      assert.equal((await make({ n: 1, map: 'palace' })).status, 400, 'no paid land');
+      assert.equal((await api('/fight', { method: 'POST', headers: { origin: 'https://evil.example' }, body: '{"n":1,"map":"ruins"}' })).status, 403);
+      const f = await (await make({ n: 1, map: 'ruins' })).json();
+      assert.ok(/^[a-z0-9]{10}$/.test(f.code) && f.land && f.players === 0);
+      const joinFight = (name, code) => new Promise((res, rej) => {
+        const ws = new WebSocket(`ws://localhost:${port}/ws`), got = [];
+        ws.on('open', () => ws.send(JSON.stringify({ t: 'join', name, lo: 'rifle', map: 'compound', fight: code })));
+        ws.on('message', d => got.push(JSON.parse(d))); ws.on('error', rej);
+        setTimeout(() => res({ ws, got }), 900);
+      });
+      const [p1, p2] = await Promise.all([joinFight('F1', f.code), joinFight('F2', f.code)]);
+      for (const p of [p1, p2]) assert.equal(p.got.find(m => m.t === 'welcome').map, 'ruins', 'the fight decides the land');
+      assert.equal(p1.got.filter(m => m.t === 's').at(-1).ps.length, 2, 'just the two of them');
+      assert.equal(new Set([p1, p2].map(p => p.got.find(m => m.t === 'welcome').team)).size, 2, 'one on each side');
+      assert.equal((await joinFight('F3', f.code)).got[0].why, 'full');
+      assert.equal((await joinFight('F4', 'zzzzzzzzzz')).got[0].why, 'fight');
+      assert.equal((await (await api('/fight/' + f.code)).json()).players, 2);
+      const pub = await join('Pub', 'ruins');
+      assert.ok(pub.got.filter(m => m.t === 's').at(-1).ps.length >= 6, 'a public join on the same land gets its own room with bots');
+      p1.ws.close(); p2.ws.close(); pub.ws.close();
+      console.log('ok  private fights over the server: make, join by code, full, expired, kept out of matchmaking');
+    }
     assert.equal(await (await fetch(`http://localhost:${port}/healthz`)).text(), 'ok');
     for (const c of [c1, c2, ...extra, own, gun, odd]) c.ws.close();
     console.log('ok  server: join, snapshots, roster, status, static files, land choice, paid land and weapon checks, voice relay, bad messages');

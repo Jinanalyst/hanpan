@@ -137,7 +137,7 @@ function paintMessages(list, sid) {
     }
     prev = m;
     const line = el('div', 'line');
-    line.append(el('span', '', m.body));
+    line.append(fightCard(m.body) || el('span', '', m.body));
     if (mine || p?.me) line.append(btn('Delete', `Delete message from ${name}: ${m.body.slice(0, 60)}`, () => act(async () => { await rpc('unpost', { p_message: m.id }); await getMessages(); }), 'del'));
     li.append(line);
     return li;
@@ -298,6 +298,61 @@ $('delBtn').onclick = async () => {
   const s = editing;
   $('editDlg').close();
   if (s && await ask(`Delete ${s.name} with all of its messages, for everyone? This cannot be undone.`, 'Delete')) act(async () => { await rpc('delete', { p_server: s.id }); close(''); await getHome(); });
+};
+
+/* ---- private fights ---- */
+// A fight is an ordinary chat message, so only members of this server can read the link.
+// The card always opens this site's own game page, whatever address the message text holds.
+const FIGHT_RE = /^⚔ ([125]) vs \1 fight on (.{1,40}) · join: \S*\?fight=([a-z0-9]{10})$/u;
+function fightCard(body) {
+  const f = FIGHT_RE.exec(body);
+  if (!f) return null;
+  const card = el('div', 'fightCard'), text = el('div'), go = el('a', 'btn primary', 'Join fight');
+  text.append(el('b', '', `⚔ ${f[1]} vs ${f[1]} fight`), el('br'), el('small', '', f[2] + ' · private to this server'));
+  go.href = './?fight=' + f[3];
+  go.setAttribute('aria-label', `Join the ${f[1]} vs ${f[1]} fight on ${f[2]}`);
+  card.append(text, go);
+  return card;
+}
+let lands = null;
+async function fightLands() {
+  if (lands) return lands;
+  const r = await fetch('fight/lands', { cache: 'no-store' });
+  if (!r.ok) throw new Error('no_game');
+  return (lands = (await r.json()).lands);
+}
+$('fightBtn').onclick = async () => {
+  $('fightErr').textContent = '';
+  const sel = $('fightLand');
+  try {
+    const list = await fightLands(), was = sel.value || load('hanpan-fight-land');
+    sel.replaceChildren(...[['Cities', true], ['Battlegrounds', false]].map(([label, city]) => {
+      const g = el('optgroup'); g.label = label;
+      g.append(...list.filter(l => l.city === city).map(l => { const o = el('option', '', l.name); o.value = l.id; return o; }));
+      return g;
+    }));
+    if (list.some(l => l.id === was)) sel.value = was;
+  } catch { status('Fights need the game server. Open this page from hanpan.team.'); return; }
+  $('fightDlg').showModal();
+};
+$('fightNo').onclick = () => $('fightDlg').close();
+$('fightForm').onsubmit = async e => {
+  e.preventDefault();
+  const sid = cur, n = +$('fightForm').querySelector('[name=size]:checked').value, map = $('fightLand').value;
+  if ($('fightOk').disabled || !sid) return;
+  $('fightOk').disabled = true;
+  const say = t => { $('fightErr').textContent = t; };
+  try {
+    const r = await fetch('fight', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n, map }) });
+    const f = await r.json().catch(() => ({}));
+    if (!r.ok || !f.code) { say(r.status === 429 ? 'Too many fights made. Wait a minute.' : 'The game server could not make the fight. Try again.'); return; }
+    save('hanpan-fight-land', map);
+    const ok = await act(async () => {
+      await rpc('post', { p_server: sid, p_body: `⚔ ${n} vs ${n} fight on ${f.land} · join: ${location.origin}/?fight=${f.code}` });
+      if (sid === cur) { await getMessages(); $('log').scrollTop = $('log').scrollHeight; }
+    }, say);
+    if (ok) $('fightDlg').close();
+  } catch { say('The game server did not answer. Try again in a moment.'); } finally { $('fightOk').disabled = false; }
 };
 
 function ask(text, yes) {
