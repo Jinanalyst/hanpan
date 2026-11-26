@@ -165,6 +165,37 @@ for (const id of MAP_IDS) {
   console.log('ok  war front: bombs, cover, helicopters, shooting them down, same for both teams');
 }
 
+// Medkits fall at random reachable spots; walking over one heals, first come first served
+{
+  for (const id of ['compound', 'hill', 'beach', 'ruins']) {
+    const room = new Room({ minPlayers: 0, map: id }), got = [];
+    const a = room.players.get(room.addPlayer('A', 'rifle', m => got.push(m))), t0 = performance.now() / 1000;
+    assert.equal(room.drops.length, 0, 'none at the start');
+    a.x = 999;                                                  // out of the way while they land
+    for (let i = 0; i < 20; i++) { room.dropNext = 0; room.updateDrops(t0); }
+    assert.equal(room.drops.length, 3, id + ': at most three at once');
+    const spawns = [...room.map.spawns.red, ...room.map.spawns.blue];
+    for (const d of room.drops) {
+      assert.ok(spawns.every(s => Math.hypot(s[0] - d.x, s[1] - d.z) >= 12), id + ': away from the spawns');
+      assert.equal(d.y, groundAt(room.map.boxes, d.x, d.z));
+      assert.ok(!hits(d.x, d.y + 0.05, d.z, PHYS.hc - 0.1, room.map.boxes), id + ': on open floor');
+    }
+    assert.equal(got.filter(m => m.t === 'hd').length, 3);
+    const late = []; room.addPlayer('Late', 'rifle', m => late.push(m)); assert.equal(late.filter(m => m.t === 'hd').length, 3, 'late joiners see them');
+    const d = room.drops[0];
+    Object.assign(a, { x: d.x, y: d.y, z: d.z, hp: 40 });
+    room.dropNext = 1e9; room.updateDrops(t0 + 0.5); assert.equal(a.hp, 40, 'not while it falls');
+    room.updateDrops(d.at); assert.equal(a.hp, 90, 'heals once it lands'); assert.equal(room.drops.length, 2);
+    assert.ok(got.some(m => m.t === 'hx' && m.id === d.id && m.by === a.id));
+    const e = room.drops[0]; Object.assign(a, { x: e.x, y: e.y, z: e.z, hp: 100 });
+    room.updateDrops(e.at); assert.equal(room.drops.length, 2, 'full health leaves it for someone else');
+    room.updateDrops(e.until); assert.equal(room.drops.length, 0, 'they go away after a while'); assert.ok(got.some(m => m.t === 'hx' && m.id === e.id && !m.by));
+    room.dropNext = 0; room.updateDrops(t0); room.endMatch(); assert.equal(room.drops.length, 0, 'the end clears them');
+  }
+  { const room = new Room({ minPlayers: 0 }); room.dropNext = 0; room.updateDrops(performance.now() / 1000); assert.equal(room.drops.length, 0, 'an empty room drops nothing'); }
+  console.log('ok  medkits: random safe spots, heal on touch, expire, cleared at the end');
+}
+
 // Hill 625: the hill can be walked up and down from every side, by players and bots, and the bridge can be crossed
 {
   const map = getMap('hill'), B = map.boxes, me = (x, z, y = 0) => ({ x, y, z, vx: 0, vy: 0, vz: 0, cr: 0, ground: true });

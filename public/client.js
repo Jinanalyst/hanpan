@@ -16,7 +16,7 @@ import { AIR_NAMES } from './shared/air.js';
 import { floorPlan } from './floorplan.js';
 import { createVoice } from './voice.js';
 import { createBattle, clampVolume } from './battle.js';
-import { Room, cleanName } from './shared/game.js';
+import { Room, cleanName, DROP } from './shared/game.js';
 import { configured, currentUser, maybeSignedIn, signOut, accessToken, ownedProducts, walletOf, shortWallet } from './auth.js';
 
 const $ = id => document.getElementById(id);
@@ -544,8 +544,32 @@ function addSmoke(p, life) {
   g.position.set(p.x, p.y, p.z); scene.add(g);
   smokes.push({ g, t: 0, life });
 }
+/* ---------------- medkits that fall onto the land ---------------- */
+const kits = new Map();   // id -> { g, y, land }
+const kitGlow = new THREE.SpriteMaterial({ map: puffTex, color: 0x5fff7a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 });
+function kitAdd(m) {
+  if (kits.has(m.id)) return;
+  const g = new THREE.Group(), box = bake(buildEquip('med'));
+  box.scale.setScalar(3); g.add(box);
+  const glow = new THREE.Sprite(kitGlow); glow.scale.setScalar(1.6); glow.position.y = 0.1; g.add(glow);
+  g.position.set(m.p[0], m.p[1] + 0.4, m.p[2]); scene.add(g);
+  kits.set(m.id, { g, y: m.p[1], land: nowS() + (m.f || 0) });
+}
+function kitGone(m) {
+  const q = kits.get(m.id);
+  if (q) { scene.remove(q.g); dispose(q.g.children[0]); kits.delete(m.id); }
+  if (m.by && m.by === myId) { blip(520, 0.12, 0.08, 'triangle'); blip(700, 0.16, 0.08, 'triangle', 0.12); blip(880, 0.2, 0.07, 'triangle', 0.24); airText('Medkit  +' + DROP.heal + ' health'); }
+}
+function clearKits() { for (const id of [...kits.keys()]) kitGone({ id }); }
+function updateKits(t) {
+  for (const q of kits.values()) {
+    const k = Math.max(0, (q.land - t) / DROP.fall);   // falls from the sky, then floats and turns
+    q.g.position.y = q.y + 0.45 + Math.sin(t * 2.5) * 0.08 + k * k * 16;
+    q.g.rotation.y = t * 1.6;
+  }
+}
 function clearThrown() {
-  war.clear(); airText('');
+  war.clear(); airText(''); clearKits();
   for (const id of [...nades.keys()]) nadeGone(id);
   for (const f of fires.splice(0)) freeGroup(f.g);
   stopAiming(); blindEnd = 0;
@@ -733,7 +757,9 @@ function onMsg(m) {
     case 'dmg': showDmg(m); break;
     case 'k': onKill(m); break;
     case 'rl': battle.reload(); reloadT = reloadDur = m.d; noiseSfx(0.06, 2500, 0.15, 0.1); noiseSfx(0.08, 1800, 0.18, m.d * 0.7); break;
-    case 'end': showEnd(m); break;
+    case 'end': showEnd(m); clearKits(); break;
+    case 'hd': kitAdd(m); break;
+    case 'hx': kitGone(m); break;
     case 'start': battle.start(); clearThrown(); setText('center', ''); break;
     case 'deny': leaveGame({ check: 'Could not check what you own. Try again in a moment.', fight: 'This fight link has expired. Ask for a new one.', full: 'This fight is full.' }[m.why] || 'You need to own this land to play it online. It is in the Store.'); break;
     case 'lb': showLobby(m); break;
@@ -997,6 +1023,8 @@ function drawMini() {
   const t = nowS();
   mg.lineWidth = 0.4; mg.strokeStyle = '#ff5a3c'; mg.fillStyle = 'rgba(255,90,60,.22)';
   for (const [x, z] of war.bombs()) { mg.beginPath(); mg.arc(x, z, 4, 0, 7); mg.fill(); mg.stroke(); }
+  mg.fillStyle = '#5fff7a';
+  for (const q of kits.values()) { const { x, z } = q.g.position; mg.fillRect(x - 1.5, z - 0.5, 3, 1); mg.fillRect(x - 0.5, z - 1.5, 1, 3); }
   mg.lineWidth = 0.7;
   for (const [x, z, tm] of war.helis()) { mg.strokeStyle = tm === myTeam ? '#7fd3ff' : '#ff5a3c'; mg.beginPath(); mg.moveTo(x - 1.6, z - 1.6); mg.lineTo(x + 1.6, z + 1.6); mg.moveTo(x + 1.6, z - 1.6); mg.lineTo(x - 1.6, z + 1.6); mg.stroke(); }
   for (const [, o] of others) {
@@ -1427,6 +1455,7 @@ function frame() {
   updateFx(dt);
   if (inGame) {
     updateThrown(real);   // grenades keep server time even on a slow screen
+    updateKits(t);
     updateLocal(dt, t);
     interpRemotes(dt);
     updateHud(dt, t);

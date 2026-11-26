@@ -1,6 +1,6 @@
 // Authoritative match logic. Isomorphic: the Node server runs it for online play,
 // the browser runs the same code for offline practice.
-import { getMap, randomRoute } from './map.js';
+import { getMap, randomRoute, groundAt } from './map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceH, stanceEye, fitStance, leanOff, eyeOf, wallAt, peekRoom, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
 import { WEAPONS, EQUIP, SIDEARMS, isPrimary, isSidearm, isEquip, damageAt } from './weapons.js';
 import { BOMBER, HELI, flightLife, bombRun, bombLands, heliAt, heliFiring } from './air.js';
@@ -26,6 +26,8 @@ export const cleanName = s => String(s || '').replace(/[^\p{L}\p{N} _\-]/gu, '')
 export const cleanChat = s => typeof s !== 'string' ? '' : [...s.replace(/[\p{Cc}\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, 120).join('');
 const CHAT_BURST = 4, CHAT_EVERY = 1.5;   // messages at once, then seconds per message
 const VOICE_PER_SEC = 25;                 // packets of 40 ms
+// Medkits that fall onto the land now and then. Whoever walks over one first gets the health.
+export const DROP = { max: 3, every: [10, 18], fall: 1.5, life: 45, heal: 50, reach: 1.2 };
 
 export class Room {
   constructor(o = {}) {
@@ -50,6 +52,7 @@ export class Room {
     this.fires = [];    // { x, y, z, until, by, team, next }
     this.airSeq = 1;
     this.clearAir();
+    this.clearDrops();
     // A private fight (fight = players per team): no bots, and the match starts once both teams are full.
     this.fight = o.fight || 0;
     if (this.fight) { this.minPlayers = 0; this.maxPlayers = this.fight * 2; this.phase = 'wait'; this.goT = 0; }
@@ -95,6 +98,7 @@ export class Room {
     for (const [w, list] of [['smoke', this.smokes], ['fire', this.fires]]) for (const s of list) if (s.until > t) p.send({ t: 'gx', id: 0, w, p: [s.x, s.y, s.z].map(r2), d: r2(s.until - t) });
     for (const n of this.nades) if (n.stuck) p.send({ t: 'gt', id: n.id, w: n.w, by: n.by, tm: n.team, o: [n.x, n.y, n.z].map(r2), v: [0, 0, 0], st: 1 });
     for (const s of this.flights) p.send(this.flightMsg(s, t));
+    for (const d of this.drops) p.send(this.dropMsg(d, t));
     this.balanceBots();
     this.roster();
     this.lobby();
@@ -225,7 +229,7 @@ export class Room {
   }
   toLobby() {
     this.phase = 'wait'; this.goT = 0;
-    this.nades = []; this.smokes = []; this.fires = []; this.clearAir();
+    this.nades = []; this.smokes = []; this.fires = []; this.clearAir(); this.clearDrops();
     for (const p of this.players.values()) this.spawn(p);
     this.lobby();
   }
@@ -504,6 +508,51 @@ export class Room {
     this.broadcast({ t: 'ad', id: s.id, by: p.id, down: s.down });
   }
 
+  /* ---- medkits falling onto the land ---- */
+  clearDrops() {
+    this.drops = [];                       // { id, x, y, z, at: lands, until }
+    this.dropSeq ||= 1;
+    this.dropNext = now() + rnd(...DROP.every);
+  }
+
+  dropMsg(d, t) { return { t: 'hd', id: d.id, p: [d.x, d.y, d.z], f: r2(Math.max(0, d.at - t)) }; }
+
+  // A random spot that people can walk to, away from the spawns, the other kits and the players.
+  dropSpot() {
+    const { points, main } = this.map.nav, spawns = [...this.map.spawns.red, ...this.map.spawns.blue];
+    for (let i = 0; i < 30; i++) {
+      const [x, z] = points[main[Math.random() * main.length | 0]];
+      if (spawns.some(s => Math.hypot(s[0] - x, s[1] - z) < 12)) continue;
+      if (this.drops.some(d => Math.hypot(d.x - x, d.z - z) < 10)) continue;
+      if ([...this.players.values()].some(q => q.alive && Math.hypot(q.x - x, q.z - z) < 5)) continue;
+      return [x, groundAt(this.map.boxes, x, z), z];
+    }
+    return null;
+  }
+
+  updateDrops(t) {
+    for (const d of [...this.drops]) if (t >= d.until) { this.drops.splice(this.drops.indexOf(d), 1); this.broadcast({ t: 'hx', id: d.id }); }
+    if (t >= this.dropNext) {
+      this.dropNext = t + rnd(...DROP.every);
+      const at = this.drops.length < DROP.max && this.humanCount() && this.map.nav.main.length && this.dropSpot();
+      if (at) {
+        const d = { id: this.dropSeq++, x: at[0], y: at[1], z: at[2], at: t + DROP.fall, until: t + DROP.fall + DROP.life };
+        this.drops.push(d);
+        this.broadcast(this.dropMsg(d, t));
+      }
+    }
+    for (const d of [...this.drops]) {
+      if (t < d.at) continue;              // still falling
+      for (const p of this.players.values()) {
+        if (!p.alive || p.hp >= 100 || Math.hypot(p.x - d.x, p.z - d.z) > DROP.reach || Math.abs(p.y - d.y) > 1.2) continue;
+        p.hp = Math.min(100, p.hp + DROP.heal);
+        this.drops.splice(this.drops.indexOf(d), 1);
+        this.broadcast({ t: 'hx', id: d.id, by: p.id });
+        break;
+      }
+    }
+  }
+
   // Is the straight line from a to b cut by smoke?
   smoked(a, b) {
     const t = now(), r = EQUIP.smoke.radius;
@@ -559,7 +608,7 @@ export class Room {
     if (this.phase !== 'play') return;
     this.phase = 'end';
     this.endT = 10;
-    this.nades = []; this.fires = []; this.clearAir();
+    this.nades = []; this.fires = []; this.clearAir(); this.clearDrops();
     const s = this.score;
     this.broadcast({ t: 'end', winner: win || (s.red === s.blue ? 'draw' : s.red > s.blue ? 'red' : 'blue'), score: [s.red, s.blue], fight: this.fight ? 1 : 0, left: win ? 1 : 0 });
   }
@@ -568,7 +617,7 @@ export class Room {
     this.phase = 'play';
     this.timeLeft = this.matchTime;
     this.score = { red: 0, blue: 0 };
-    this.nades = []; this.smokes = []; this.fires = []; this.clearAir();
+    this.nades = []; this.smokes = []; this.fires = []; this.clearAir(); this.clearDrops();
     for (const p of this.players.values()) { p.k = 0; p.d = 0; this.spawn(p); }
     this.broadcast({ t: 'start' });
     this.roster();
@@ -597,6 +646,7 @@ export class Room {
     }
     this.updateNades(dt, t);
     if (this.map.air && this.phase === 'play') this.updateAir(t);
+    if (this.phase === 'play') this.updateDrops(t);
     for (const p of this.players.values()) {
       if (!p.alive) {
         if (this.phase === 'play' && (p.rsT -= dt) <= 0) this.spawn(p);
