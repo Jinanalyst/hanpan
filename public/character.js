@@ -4,7 +4,7 @@ import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS, damageAt } from './shared/weapons.
 import { GEAR, SLOTS, itemsOf, cleanGear, randomGear, packGear } from './shared/gear.js';
 import { cleanName } from './shared/game.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, loadRecord } from './profile.js';
-import { makeSoldier, setWeapon, disposeSoldier, soldierReady } from './soldier.js';
+import { makeSoldier, setWeapon, disposeSoldier, soldierReady } from './soldier.js?v=glb1';   // the CDN keeps .js files for a week: change ?v whenever soldier.js changes
 import { buildGun, buildEquip } from './arsenal.js';
 import { dispose } from './models.js';
 import { snap, lightStage, VIEWS } from './studio.js';
