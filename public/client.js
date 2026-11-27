@@ -4,7 +4,7 @@ import { getMap, isMap, isReal, isReady, addCity, canPlay, randomMap, groundAt, 
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, WALL, alongWall, leanOff, wallAt, lowWall, findWall, peekRoom, dirFrom, hits, rayMap, hitbox } from './shared/physics.js';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
-import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
+import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord, kitGuns } from './profile.js';
 import { makeSoldier, setWeapon, disposeSoldier, outfit, soldierReady } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
 import { bake, box, dispose } from './models.js';
@@ -366,13 +366,13 @@ let VMS = {}, vmTeam = '', vmOutfit = null, vmGear = null;
 const vmRoot = new THREE.Group(); vmScene.add(vmRoot);
 function buildVM(team) {
   const key = team + packGear(kit().gear);
-  if (key === vmTeam) { vmGun(act.lo); vmGun(act.sa); return; }
+  if (key === vmTeam) { for (const k of carried()) vmGun(k); return; }
   vmTeam = key;
   vmRoot.remove(muzzle); dispose(vmRoot); vmRoot.clear();
   vmGear = kit().gear; vmOutfit = outfit(team, vmGear);
   VMS = {};
   vmRoot.add(muzzle);
-  for (const k of new Set([act.lo, act.sa, cur])) vmGun(k);
+  for (const k of new Set([...carried(), cur])) vmGun(k);
 }
 // Guns are built when they are first carried, not all at once.
 function vmGun(k) {
@@ -650,7 +650,10 @@ const kit = () => activeKit(profile);
 let net = null, inGame = false, myId = 0, myTeam = 'red', roster = new Map(), snaps = [], offEst = null;
 const me = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, wl: 0, pk: 0, yaw: 0, pitch: 0 };
 let sp = 0, srv = { hp: 100, a: 30, r: 150, w: 'rifle', eq: 0, al: 1, rs: 0, rl: 0, pg: 0, pr: 0 }, score = [0, 0], timeLeft = 600, phase = 'play';
-let act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }, cur = act.lo, switchT = 0;   // what I carry right now; set by the server at each spawn
+// What I carry right now (set by the server at each spawn) and the guns on keys 1 to 5
+const kitAct = () => ({ lo: kit().lo, sa: kit().sa, xs: kitGuns(kit()).slice(2), eq: kit().eq });
+const carried = () => [act.lo, act.sa, ...act.xs];
+let act = kitAct(), cur = act.lo, switchT = 0;
 let sens = +store.get('hanpan-sens', 1.2) || 1.2;
 let stepOff = 0;   // the view follows the feet up a step smoothly
 let eyeH = PHYS.eye, adsT = 0, bloom = 0, recoilDebt = 0, nextFire = 0, trigger = false, latch = false, ads = false;
@@ -741,7 +744,7 @@ function onMsg(m) {
   }
   switch (m.t) {
     case 'welcome': loadMap(m.map); myId = m.id; myTeam = m.team; buildVM(myTeam); break;
-    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; leanEnd(); if (m.lo) { stance = me.cr = stepOff = 0; leanX = leanZ = slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; vmGun(m.lo); vmGun(m.sa); } break;
+    case 'tp': Object.assign(me, { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: 0, vx: 0, vy: 0, vz: 0 }); sp = m.sp; leanEnd(); if (m.lo) { stance = me.cr = stepOff = 0; leanX = leanZ = slideT = 0; stopAiming(); act = { lo: m.lo, sa: m.sa, xs: m.xs || [], eq: m.eq }; cur = m.lo; switchT = nowS(); reloadT = 0; for (const k of carried()) vmGun(k); } break;
     case 's': onSnap(m); break;
     case 'ro': {
       roster = new Map(m.ps.map(p => [p.id, p]));
@@ -1072,8 +1075,8 @@ addEventListener('keydown', e => {
     if (e.code === 'KeyX') setStance(stance === 2 ? 0 : 2);
     if (e.code === 'Space' && stance) { setStance(0); K.Space = false; }   // Space stands up first
   }
-  for (const [key, w] of [['Digit1', act.lo], ['Digit2', act.sa]]) {
-    if (e.code === key && cur !== w) { cur = w; switchT = nowS(); reloadT = 0; send({ t: 'w', w }); }
+  for (const [i, w] of carried().entries()) {   // 1 primary, 2 sidearm, 3 to 5 the extra guns
+    if (e.code === 'Digit' + (i + 1) && cur !== w) { cur = w; switchT = nowS(); reloadT = 0; send({ t: 'w', w }); }
   }
   if (e.code === 'Space') e.preventDefault();
 });
@@ -1266,7 +1269,7 @@ for (const s of document.querySelectorAll('select[data-pick]')) {
   for (const id of PICKS[s.dataset.pick]) { const o = document.createElement('option'); o.value = id; s.append(o); }
   s.onchange = () => {
     kit()[s.dataset.pick] = s.value; saveProfile(profile); paintLo();
-    if (inGame) { send({ t: 'lo', lo: kit().lo, sa: kit().sa, eq: kit().eq }); setText('kitNote', 'You get this at your next spawn.'); }
+    if (inGame) { send({ t: 'lo', lo: kit().lo, sa: kit().sa, x: kit().x, eq: kit().eq }); setText('kitNote', 'You get this at your next spawn.'); }
   };
 }
 function paintLo() {
@@ -1360,7 +1363,7 @@ function enterGame() {
   inGame = true; $('menu').hidden = true; $('hud').hidden = false; status('');
   muted.clear(); $('chatLog').textContent = ''; if (document.activeElement) document.activeElement.blur();
   chatLine('', voiceOn && net?.sendBin ? 'Hold V to talk to your team. Enter for team chat.' : 'Press Enter for team chat.', 'sys');
-  snaps = []; offEst = null; act = { lo: kit().lo, sa: kit().sa, eq: kit().eq }; cur = act.lo; wasAlive = true; deathAt = null; roster = new Map();
+  snaps = []; offEst = null; act = kitAct(); cur = act.lo; wasAlive = true; deathAt = null; roster = new Map();
   battle.reset(); battle.start();
   dropSoldiers(); clearThrown(); paintLo(); hudCache.kitNote = null; setText('kitNote', '');
 }
@@ -1379,7 +1382,7 @@ $('practice').onclick = async () => {
   if (!await prepare(pick)) return;
   const room = new Room({ id: 'practice', minPlayers: 8, map: pick });
   let live = true;
-  const id = room.addPlayer(playerName(), kit().lo, m => queueMicrotask(() => live && onMsg(m)), 'all', null, { sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear) });   // practice: try everything
+  const id = room.addPlayer(playerName(), kit().lo, m => queueMicrotask(() => live && onMsg(m)), 'all', null, { sa: kit().sa, x: kit().x, eq: kit().eq, gear: packGear(kit().gear) });   // practice: try everything
   const timer = setInterval(() => room.update(1 / 30), 1000 / 30);
   net = { send: m => room.onMessage(id, m), close() { live = false; clearInterval(timer); } };
   enterGame();
@@ -1444,7 +1447,7 @@ async function goOnline(private_) {
   const to = setTimeout(() => { if (!opened) { ws.close(); status('No game server found at this address. Try Practice, or deploy the server.'); if (document.pointerLockElement) document.exitPointerLock(); } }, 4000);
   ws.onopen = () => {
     opened = true; clearTimeout(to);
-    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo: kit().lo, sa: kit().sa, eq: kit().eq, gear: packGear(kit().gear), map: want, fight: private_ ? fightCode : undefined, token: token || undefined }));
+    ws.send(JSON.stringify({ t: 'join', name: playerName(), lo: kit().lo, sa: kit().sa, x: kit().x, eq: kit().eq, gear: packGear(kit().gear), map: want, fight: private_ ? fightCode : undefined, token: token || undefined }));
     net = mine = { online: true, send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }, sendBin: b => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(b); }, close: () => ws.close() };
     enterGame();
   };

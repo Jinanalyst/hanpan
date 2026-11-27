@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS, damageAt } from './shared/weapons.js';
 import { GEAR, SLOTS, itemsOf, cleanGear, randomGear, packGear } from './shared/gear.js';
 import { cleanName } from './shared/game.js';
-import { loadProfile, saveProfile, activeKit, loadName, saveName, loadRecord } from './profile.js';
+import { loadProfile, saveProfile, activeKit, loadName, saveName, loadRecord, cleanExtras } from './profile.js';
 import { makeSoldier, setWeapon, disposeSoldier, soldierReady } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
 import { dispose } from './models.js';
@@ -19,14 +19,22 @@ const kit = () => activeKit(profile);
 const locked = product => !!product && !owned.has(product);
 
 /* ---- slots: weapons and equipment first, then the outfit ---- */
+const EMPTY = { name: 'Empty', desc: 'Nothing on this key.' };
+const isX = s => /^x\d$/.test(s), xi = s => +s[1];
+const gunSlot = s => s === 'lo' || s === 'sa' || isX(s);
 const LOAD = {
   lo: { name: 'Primary', view: 'gun', ids: PRIMARIES, of: id => WEAPONS[id], note: 'Every weapon is free to try in Practice. Locked ones need the Store to be used online.' },
   sa: { name: 'Sidearm', view: 'gun', ids: SIDEARMS, of: id => WEAPONS[id], note: 'Press 2 in a match to draw it.' },
+  // extra guns on keys 3 to 5: any weapon, or nothing
+  ...Object.fromEntries([3, 4, 5].map((n, i) => ['x' + i, {
+    name: 'Slot ' + n, view: 'gun', ids: ['none', ...Object.keys(WEAPONS)], of: id => (id === 'none' ? EMPTY : WEAPONS[id]),
+    note: `Press ${n} in a match to draw it. A gun the kit already carries is left out.`,
+  }])),
   eq: { name: 'Equipment', view: 'full', ids: Object.keys(EQUIP), of: id => EQUIP[id], note: 'In a match, hold G to aim and release to throw. The med kit works with one press.' },
 };
-const GROUPS = [['Weapons', ['lo', 'sa', 'eq', 'finish']], ['Head', ['helmet', 'face', 'skin']], ['Body', ['camo', 'vest', 'pack', 'gloves', 'boots', 'extra']]];
+const GROUPS = [['Weapons', ['lo', 'sa', 'x0', 'x1', 'x2', 'eq', 'finish']], ['Head', ['helmet', 'face', 'skin']], ['Body', ['camo', 'vest', 'pack', 'gloves', 'boots', 'extra']]];
 const slotName = s => (LOAD[s] || GEAR[s]).name;
-const current = s => (LOAD[s] ? kit()[s] : kit().gear[s]);
+const current = s => (isX(s) ? kit().x[xi(s)] : LOAD[s] ? kit()[s] : kit().gear[s]);
 const itemName = (s, id) => (LOAD[s] ? LOAD[s].of(id).name : GEAR[s].items[id]);
 
 /* ---- stage ---- */
@@ -45,7 +53,8 @@ ring.rotation.x = Math.PI / 2; scene.add(ring);
 let body = null, shown = '', turn = VIEWS.full[2], turnTo = turn, camY = VIEWS.full[0], camD = VIEWS.full[1], zoom = 1, view = 'full';
 
 function dress() {
-  const want = team + packGear(kit().gear), gun = sidearm ? kit().sa : kit().lo;
+  const x = isX(slot) ? kit().x[xi(slot)] : 'none';   // an extra slot shows its gun in the hands
+  const want = team + packGear(kit().gear), gun = x !== 'none' ? x : sidearm ? kit().sa : kit().lo;
   if (want !== shown) {
     if (body) { scene.remove(body); disposeSoldier(body); }
     body = makeSoldier(team, kit().gear, gun);
@@ -89,7 +98,8 @@ canvas.addEventListener('keydown', e => { const d = { ArrowLeft: -0.25, ArrowRig
 /* ---- cards ---- */
 let batch = 0;
 function picture(s, id, cv) {
-  if (s === 'lo' || s === 'sa') { const m = buildGun(id, kit().gear.finish).g; snap(cv, m, { box: true }); dispose(m); return; }
+  if (id === 'none') { cv.getContext('2d').clearRect(0, 0, cv.width, cv.height); return; }
+  if (gunSlot(s)) { const m = buildGun(id, kit().gear.finish).g; snap(cv, m, { box: true }); dispose(m); return; }
   if (s === 'eq') { const m = buildEquip(id); m.rotation.y = 1.1; snap(cv, m, { box: true }); dispose(m); return; }
   if (s === 'finish') { const m = buildGun(kit().lo, id).g; snap(cv, m, { box: true }); dispose(m); return; }
   const m = makeSoldier(team, { ...kit().gear, [s]: id }, kit().lo);
@@ -112,11 +122,11 @@ function paintItems() {
   const run = ++batch, L = LOAD[slot], ids = L ? L.ids : itemsOf(slot), jobs = [];
   $('slotName').textContent = slotName(slot);
   $('slotNote').textContent = L ? L.note : slot === 'camo' ? 'Arm bands, headgear band and back patch always show your team colour.' : 'Looks only. Gear does not change health, speed or hit areas.';
-  $('items').className = 'items' + (slot === 'lo' || slot === 'sa' || slot === 'finish' ? ' wide' : '');
+  $('items').className = 'items' + (gunSlot(slot) || slot === 'finish' ? ' wide' : '');
   $('items').replaceChildren(...ids.map(id => {
     const b = el('button', 'item'), cv = el('canvas'), on = current(slot) === id, o = L?.of(id);
     b.type = 'button'; b.dataset.id = id; b.setAttribute('aria-pressed', on);
-    const wide = slot === 'lo' || slot === 'sa' || slot === 'finish';
+    const wide = gunSlot(slot) || slot === 'finish';
     cv.width = wide ? 360 : 220; cv.height = wide ? 130 : 220; cv.ariaHidden = 'true';
     b.append(cv, el('b', '', itemName(slot, id)));
     if (o?.desc) b.append(el('small', '', o.desc));
@@ -156,7 +166,7 @@ function paintBar() {
   $('swap').textContent = sidearm ? 'Show primary' : 'Show sidearm';
 }
 function note() {
-  const no = [kit().lo, kit().sa].map(id => WEAPONS[id]).find(w => locked(w.product));
+  const no = [kit().lo, kit().sa, ...kit().x.filter(id => id !== 'none')].map(id => WEAPONS[id]).find(w => locked(w.product));
   $('status').textContent = '';
   if (!no) return;
   const a = el('a', '', 'Open the Store'); a.href = 'store.html';
@@ -164,15 +174,18 @@ function note() {
 }
 function all() { dress(); paintKits(); paintSlots(); paintItems(); paintBar(); note(); }
 function open(s) {
-  slot = s; sidearm = s === 'sa' || (s !== 'lo' && s !== 'finish' && sidearm);
+  slot = s; sidearm = s === 'sa' || (s !== 'lo' && s !== 'finish' && !isX(s) && sidearm);
   look((LOAD[s] || GEAR[s]).view); dress(); paintSlots(); paintItems(); paintBar();
 }
 function pick(id) {
   const k = kit();
-  if (LOAD[slot]) k[slot] = id; else k.gear = cleanGear({ ...k.gear, [slot]: id });
+  if (isX(slot)) k.x[xi(slot)] = id;
+  else if (LOAD[slot]) k[slot] = id;
+  else k.gear = cleanGear({ ...k.gear, [slot]: id });
+  k.x = cleanExtras(k.x, k.lo, k.sa);   // no gun twice in one kit
   saveProfile(profile);
   dress(); paintKits(); paintSlots(); note();
-  for (const b of $('items').children) b.setAttribute('aria-pressed', b.dataset.id === id);
+  for (const b of $('items').children) b.setAttribute('aria-pressed', b.dataset.id === current(slot));
 }
 
 $('teamSeg').onclick = e => { const b = e.target.closest('button'); if (!b) return; team = b.dataset.team; dress(); paintItems(); paintBar(); };

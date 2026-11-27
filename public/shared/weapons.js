@@ -84,6 +84,10 @@ const inSlot = (w, n) => typeof w === 'string' && Object.hasOwn(WEAPONS, w) && W
 export const isPrimary = w => inSlot(w, 1);
 export const isSidearm = w => inSlot(w, 2);
 export const isEquip = e => typeof e === 'string' && Object.hasOwn(EQUIP, e);
+export const isWeapon = w => typeof w === 'string' && Object.hasOwn(WEAPONS, w);
+// Besides the primary (key 1) and sidearm (key 2), a kit carries up to this many more guns on keys 3, 4, 5.
+export const EXTRA_SLOTS = 3;
+export const FREE_WEAPONS = Object.keys(WEAPONS).filter(k => !WEAPONS[k].product);
 
 // Damage of one bullet or pellet before rounding.
 export function damageAt(W, dist, head) {

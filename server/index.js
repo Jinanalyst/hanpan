@@ -149,7 +149,7 @@ wss.on('connection', ws => {
       }
       if (!room) room = pickRoom(m.map, owned);
       id = room.addPlayer(typeof m.name === 'string' ? m.name : '', m.lo, msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }, owned,
-        packet => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(packet); }, { sa: m.sa, eq: m.eq, gear: m.gear });   // on a slow line voice is dropped before the game lags
+        packet => { if (ws.readyState === 1 && ws.bufferedAmount < 32768) ws.send(packet); }, { sa: m.sa, x: m.x, eq: m.eq, gear: m.gear });   // on a slow line voice is dropped before the game lags
       console.log(`[join] ${room.id} ${room.map.id} #${id} (${room.humanCount()} humans)`);
       return;
     }

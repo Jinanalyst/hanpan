@@ -54,6 +54,26 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   console.log('ok  hitscan, headshot, kill credit');
 }
 
+// 1b) Keys 3 to 5: extra guns from the kit
+{
+  const room = new Room({ minPlayers: 0 }), got = [];
+  const id = room.addPlayer('A', 'rifle', m => got.push(m), new Set(['weapon:dmr']), null, { sa: 'pistol', x: ['sniper', 'smg', 'rifle', 'dmr'] });
+  const p = room.players.get(id);
+  assert.deepEqual(p.xs, ['sniper'], 'only the first three count; locked and repeated guns are dropped');
+  assert.deepEqual(got.find(m => m.t === 'tp').xs, ['sniper'], 'the spawn message lists the extras');
+  assert.equal(p.mag.sniper, WEAPONS.sniper.mag, 'an extra gun spawns loaded');
+  room.onMessage(id, { t: 'w', w: 'sniper' });
+  assert.equal(p.w, 'sniper', 'switch to an extra gun');
+  room.onMessage(id, { t: 'w', w: 'bullpup' });
+  assert.equal(p.w, 'sniper', 'a gun not carried is refused');
+  room.onMessage(id, { t: 'lo', lo: 'rifle', sa: 'revolver', x: ['bullpup', 'battle', 'none'], eq: 'frag' });
+  room.spawn(p);
+  assert.deepEqual([p.sa, ...p.xs], ['revolver', 'bullpup', 'battle'], 'a new loadout counts from the next spawn');
+  const r2 = new Room({ minPlayers: 0 }), q = r2.players.get(r2.addPlayer('B', 'rifle', () => {}, new Set(), null, {}));
+  assert.deepEqual(q.xs, [], 'a kit without extras carries two guns');
+  console.log('ok  extra guns on keys 3 to 5: owned, not repeated, loaded, switchable');
+}
+
 // 2) Walls block bullets
 {
   const room = new Room({ minPlayers: 0 });

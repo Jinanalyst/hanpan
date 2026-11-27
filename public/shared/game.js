@@ -2,7 +2,7 @@
 // the browser runs the same code for offline practice.
 import { getMap, randomRoute, groundAt } from './map.js';
 import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceH, stanceEye, fitStance, leanOff, eyeOf, wallAt, peekRoom, rayMap, rayBox, dirFrom, hits, hitbox } from './physics.js';
-import { WEAPONS, EQUIP, SIDEARMS, isPrimary, isSidearm, isEquip, damageAt } from './weapons.js';
+import { WEAPONS, EQUIP, SIDEARMS, EXTRA_SLOTS, isPrimary, isSidearm, isEquip, isWeapon, damageAt } from './weapons.js';
 import { BOMBER, HELI, flightLife, bombRun, bombLands, heliAt, heliFiring } from './air.js';
 import { packGear, unpackGear, randomGear } from './gear.js';
 import { PACKET } from './adpcm.js';
@@ -67,24 +67,28 @@ export class Room {
   pickPrimary(p, lo) { return isPrimary(lo) && this.canUse(p, lo) ? lo : 'rifle'; }
 
   // What the player carries from the next spawn on. Anything invalid or not owned becomes the standard issue.
+  // The extra guns (keys 3 to 5) are dropped instead: unknown, not owned, or already carried.
   setLoadout(p, l) {
-    p.want = { lo: this.pickPrimary(p, l.lo), sa: isSidearm(l.sa) && this.canUse(p, l.sa) ? l.sa : 'pistol', eq: isEquip(l.eq) ? l.eq : 'frag' };
+    const lo = this.pickPrimary(p, l.lo), sa = isSidearm(l.sa) && this.canUse(p, l.sa) ? l.sa : 'pistol', xs = [];
+    for (const w of Array.isArray(l.x) ? l.x.slice(0, EXTRA_SLOTS) : []) if (isWeapon(w) && this.canUse(p, w) && w !== lo && w !== sa && !xs.includes(w)) xs.push(w);
+    p.want = { lo, sa, xs, eq: isEquip(l.eq) ? l.eq : 'frag' };
   }
+  carries(p, w) { return w === p.lo || w === p.sa || p.xs.includes(w); }
 
-  // kit: { sa, eq, gear } = sidearm, equipment and outfit code
+  // kit: { sa, x, eq, gear } = sidearm, extra guns (keys 3 to 5), equipment and outfit code
   newPlayer(name, lo, bot, send, owned = new Set(), kit = {}) {
     const id = this.seq++;
     const team = this.teamSize('red') <= this.teamSize('blue') ? 'red' : 'blue';
     const p = {
       id, name: bot ? name : cleanName(name), team, bot, send: send || (() => {}), owned: bot ? 'all' : owned,
-      lo: 'rifle', sa: 'pistol', eq: 'frag', eqN: 0, eqNext: 0, healT: 0, want: null, gear: packGear(unpackGear(kit.gear)), k: 0, d: 0,
+      lo: 'rifle', sa: 'pistol', xs: [], eq: 'frag', eqN: 0, eqNext: 0, healT: 0, want: null, gear: packGear(unpackGear(kit.gear)), k: 0, d: 0,
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ground: true, cr: 0, crT: 0, wl: 0, pk: 0, yaw: 0, pitch: 0,
       hp: 100, alive: false, rsT: 0, prot: 0, w: '', mag: {}, res: {}, rlT: 0, next: 0,
       hist: [], ping: 0, sp: 0, lastIn: 0,
       sendBin: null, chatN: CHAT_BURST, chatAt: now(), voiceN: VOICE_PER_SEC, voiceAt: now(),
       ai: bot ? { route: [], scan: 0, target: 0, hurtBy: 0, react: 0, strafe: 1, strafeT: 0, stuckT: 0, sx: 0, sz: 0, err: rnd(0.02, 0.05), kneel: false, blind: 0, bombT: rnd(6, 16) } : null,
     };
-    this.setLoadout(p, { lo, sa: kit.sa, eq: kit.eq });
+    this.setLoadout(p, { lo, sa: kit.sa, x: kit.x, eq: kit.eq });
     this.players.set(id, p);
     return p;
   }
@@ -159,11 +163,11 @@ export class Room {
       w: p.lo, rlT: 0, next: 0, hist: [], eqN: EQUIP[p.eq].n, eqNext: 0, healT: 0,
     });
     p.mag = {}; p.res = {};
-    for (const k of [p.lo, p.sa]) { p.mag[k] = WEAPONS[k].mag; p.res[k] = WEAPONS[k].reserve; }
+    for (const k of [p.lo, p.sa, ...p.xs]) { p.mag[k] = WEAPONS[k].mag; p.res[k] = WEAPONS[k].reserve; }
     if (p.ai) p.ai.route = [];
     p.sp++;
     p.lastIn = now();
-    p.send({ t: 'tp', x: p.x, y: p.y, z: p.z, yaw: p.yaw, sp: p.sp, lo: p.lo, sa: p.sa, eq: p.eq });
+    p.send({ t: 'tp', x: p.x, y: p.y, z: p.z, yaw: p.yaw, sp: p.sp, lo: p.lo, sa: p.sa, xs: p.xs, eq: p.eq });
   }
 
   // ---- client messages ----
@@ -199,7 +203,7 @@ export class Room {
       case 'f': this.fire(p, +m.yaw, +m.pitch); break;
       case 'r': this.reload(p); break;
       case 'w':
-        if (p.alive && (m.w === p.lo || m.w === p.sa) && m.w !== p.w) { p.w = m.w; p.rlT = 0; p.next = t + 0.35; }
+        if (p.alive && this.carries(p, m.w) && m.w !== p.w) { p.w = m.w; p.rlT = 0; p.next = t + 0.35; }
         break;
       case 'lo': this.setLoadout(p, m); break;   // takes effect at the next spawn
       case 'g': this.useEquip(p, +m.yaw, +m.pitch); break;
