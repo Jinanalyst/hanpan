@@ -13,7 +13,7 @@
 - 모델 자체의 얼굴과 머리카락을 쓰고, 헬멧과 얼굴 장비만 그 위에 씌웁니다(`MODEL.head = 'model'`).
 - 12명 리그 update 합계 프레임당 약 0.5 ms. 봇 11명 판에서 60 fps.
 - 예전 Quaternius SWAT 몸은 `?model=swat`, 도형 병사는 `?legacy=1`로 볼 수 있습니다.
-- **캐시 주의**: CDN이 `.js`를 7일 동안 캐시합니다. `soldier.js`나 `soldierglb.js`를 바꾸면 `?v=` 값을 올리세요(`index.html`, `character.html`, `client.js`, `character.js`, `soldier.js`).
+- **캐시 주의**: CDN이 `.js`를 7일 동안 캐시합니다. `public/`의 `.js`를 바꾼 뒤에는 `npm run stamp`를 실행하세요. 모든 페이지의 import map에 파일 내용 해시가 붙은 URL을 적어서, 바뀐 파일만 새로 받게 합니다. 잊으면 `npm test`가 실패합니다.
 
 아래는 처음 SWAT 모델로 바꿀 때의 기록입니다.
 

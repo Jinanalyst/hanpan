@@ -14,8 +14,16 @@ import { WEAPONS, EQUIP, SIDEARMS, damageAt } from '../public/shared/weapons.js'
 import { GEAR, SLOTS, itemsOf, cleanGear, packGear, unpackGear, randomGear } from '../public/shared/gear.js';
 import { hits, hitbox, rayMap, stanceH, fitStance, step, eyeOf, wallAt, lowWall, findWall, peekRoom, PHYS } from '../public/shared/physics.js';
 import WebSocket from 'ws';
+import { stamp } from '../tools/stamp.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 0) Every page loads each script under its content hash (the CDN keeps .js files for a week)
+{
+  const stale = Object.keys(stamp()).map(f => f.split(/[\\/]/).pop());
+  assert.deepEqual(stale, [], 'import maps out of date, run npm run stamp: ' + stale.join(', '));
+  console.log('ok  script URLs carry content hashes');
+}
 
 // 1) Hitscan: A shoots B in the open, then headshots
 {

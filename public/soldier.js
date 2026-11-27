@@ -5,9 +5,9 @@ import { box, part, limb, cylG, ballG, torusG, mat, camoMat, CAMO, bake, dispose
 import { buildGun } from './arsenal.js';
 import { WEAPONS } from './shared/weapons.js';
 import { cleanGear } from './shared/gear.js';
-import { hasRig, makeRig, MODEL, keyedMaterial } from './soldierglb.js?v=2';
+import { hasRig, makeRig, MODEL, keyedMaterial } from './soldierglb.js';
 
-export { soldierReady, hasRig } from './soldierglb.js?v=2';
+export { soldierReady, hasRig } from './soldierglb.js';
 
 export const TEAMC = {
   red: { u: 0xb59a6a, v: 0x6e5c40, band: 0xd03a28, helm: 0x8a7550 },

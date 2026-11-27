@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node app.cjs",
     "maps": "node tools/osm/build.mjs",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "stamp": "node tools/stamp.mjs"
   },
   "engines": {
     "node": ">=18"
