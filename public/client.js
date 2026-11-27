@@ -905,7 +905,8 @@ function poseLean(o, s, dt, sp2, pr) {
 /* ---------------- shooting ---------------- */
 function curSpread() {
   const W = WEAPONS[cur], hs = Math.hypot(me.vx, me.vz);
-  let s = W.spread.hip + (W.spread.ads - W.spread.hip) * adsT + W.spread.move * clamp(hs / PHYS.walk, 0, 1.3) + (me.ground ? 0 : 0.06) + bloom;
+  // aiming down the sights also steadies you on the move and through a burst
+  let s = W.spread.hip + (W.spread.ads - W.spread.hip) * adsT + W.spread.move * clamp(hs / PHYS.walk, 0, 1.3) * (1 - 0.75 * adsT) + (me.ground ? 0 : 0.06) + bloom * (1 - 0.6 * adsT);
   s *= [1, 0.7, 0.5][me.cr] * (me.wl ? 0.85 : 1);   // a wall steadies you
   return s;
 }
@@ -923,7 +924,7 @@ function tryFire() {
   const s = curSpread(), yaw = me.yaw + gauss() * s, pitch = me.pitch + gauss() * s;
   send({ t: 'f', yaw, pitch });
   shotTimes.push(t);
-  bloom = Math.min(W.spread.max, bloom + W.spread.bloom);
+  bloom = Math.min(W.spread.max, bloom + W.spread.bloom * (1 - 0.4 * adsT));
   const kv = W.recoil.v * (1 - 0.4 * adsT) * [1, 0.8, 0.6][me.cr];
   me.pitch = clamp(me.pitch + kv, -1.5, 1.5); me.yaw += gauss() * W.recoil.h; recoilDebt += kv * 0.55;
   const hard = W.recoil.v >= 0.045;

@@ -15,7 +15,7 @@ function paint(finish, own) {
 }
 const vp = (g, w, h, d, x, y, z, m, rx = 0) => box(g, w, h, d, x, y, z, m, Math.min(w, h, d) > 0.025 ? 0.006 : 0, rx);
 const vcyl = (g, r, l, x, y, z, m) => part(g, cylG(r, r, l), m, x, y, z, Math.PI / 2);
-// open red-dot frame so the world stays visible when aiming
+// open red-dot frame so the world stays visible when aiming. Iron sights: ads.y puts the top of the front post on the aim point
 function sight(g, dotMat, sz = -0.02, sy = 0.09) {
   vp(g, 0.054, 0.008, 0.06, 0, sy + 0.025, sz, METAL); vp(g, 0.054, 0.008, 0.06, 0, sy - 0.025, sz, METAL);
   vp(g, 0.008, 0.058, 0.06, -0.025, sy, sz, METAL); vp(g, 0.008, 0.058, 0.06, 0.025, sy, sz, METAL);
@@ -67,15 +67,15 @@ function pistol(f) {
   vp(g, 0.04, 0.045, 0.21, 0, 0.035, -0.05, METAL); vp(g, 0.037, 0.03, 0.17, 0, 0.005, -0.04, c);
   vp(g, 0.035, 0.11, 0.05, 0, -0.06, 0.04, c, -0.25); vp(g, 0.006, 0.012, 0.006, 0, 0.063, -0.15, METAL);
   vp(g, 0.014, 0.012, 0.006, 0, 0.063, 0.05, METAL);
-  return { g, muzzle: V(0, 0.035, -0.17), hip: V(0.14, -0.15, -0.36), ads: V(0, -0.063, -0.34), left: [-0.03, -0.07, 0.03], right: [0.01, -0.07, 0.05] };
+  return { g, muzzle: V(0, 0.035, -0.17), hip: V(0.14, -0.15, -0.36), ads: V(0, -0.069, -0.34), left: [-0.03, -0.07, 0.03], right: [0.01, -0.07, 0.05] };
 }
 function revolver(f) {
   const g = new THREE.Group(), c = paint(f, 0x5a3a24);
   vcyl(g, 0.013, 0.22, 0, 0.042, -0.16, METAL); vp(g, 0.018, 0.026, 0.2, 0, 0.018, -0.15, METAL);
   vcyl(g, 0.03, 0.075, 0, 0.025, -0.01, METAL); vp(g, 0.03, 0.075, 0.1, 0, 0.03, 0.02, METAL);
-  vp(g, 0.034, 0.12, 0.05, 0, -0.055, 0.075, c, -0.35); vp(g, 0.01, 0.03, 0.02, 0, 0.07, 0.075, METAL, -0.4);
+  vp(g, 0.034, 0.12, 0.05, 0, -0.055, 0.075, c, -0.35); vp(g, 0.01, 0.03, 0.02, 0, 0.057, 0.075, METAL, -0.4);   // hammer, kept under the sight line
   vp(g, 0.006, 0.018, 0.02, 0, 0.066, -0.25, METAL);
-  return { g, muzzle: V(0, 0.042, -0.29), hip: V(0.14, -0.15, -0.38), ads: V(0, -0.08, -0.36), left: [-0.03, -0.07, 0.06], right: [0.01, -0.07, 0.08] };
+  return { g, muzzle: V(0, 0.042, -0.29), hip: V(0.14, -0.15, -0.38), ads: V(0, -0.075, -0.36), left: [-0.03, -0.07, 0.06], right: [0.01, -0.07, 0.08] };
 }
 function mpistol(f) {
   const g = new THREE.Group(), c = paint(f, 0x2f3336);
@@ -83,7 +83,7 @@ function mpistol(f) {
   vcyl(g, 0.012, 0.06, 0, 0.035, -0.2, METAL); vp(g, 0.036, 0.1, 0.05, 0, -0.06, 0.03, c, -0.15);
   vp(g, 0.026, 0.14, 0.036, 0, -0.14, 0.022, METAL, -0.05); vp(g, 0.012, 0.012, 0.16, 0.03, 0.035, 0.1, METAL);
   vp(g, 0.006, 0.014, 0.006, 0, 0.067, -0.16, METAL); vp(g, 0.014, 0.014, 0.006, 0, 0.067, 0.06, METAL);
-  return { g, muzzle: V(0, 0.035, -0.23), hip: V(0.14, -0.15, -0.37), ads: V(0, -0.068, -0.34), left: [-0.03, -0.08, 0.02], right: [0.01, -0.07, 0.04] };
+  return { g, muzzle: V(0, 0.035, -0.23), hip: V(0.14, -0.15, -0.37), ads: V(0, -0.074, -0.34), left: [-0.03, -0.08, 0.02], right: [0.01, -0.07, 0.04] };
 }
 const BUILD = { rifle, sniper, pistol, revolver, mpistol };
 export function buildGun(id, finish = 'factory') {
