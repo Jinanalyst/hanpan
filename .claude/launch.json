@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "hanpan", "runtimeExecutable": "npm", "runtimeArgs": ["start"], "port": 3000 }
+    { "name": "hanpan", "runtimeExecutable": "npm", "runtimeArgs": ["start"], "port": 3000 },
+    { "name": "hanpan-bots", "runtimeExecutable": "node", "runtimeArgs": ["app.cjs"], "port": 3000, "env": { "MIN_PLAYERS": "12" } }
   ]
 }

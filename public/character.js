@@ -4,7 +4,7 @@ import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS, damageAt } from './shared/weapons.
 import { GEAR, SLOTS, itemsOf, cleanGear, randomGear, packGear } from './shared/gear.js';
 import { cleanName } from './shared/game.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, loadRecord } from './profile.js';
-import { makeSoldier, setWeapon, disposeSoldier } from './soldier.js';
+import { makeSoldier, setWeapon, disposeSoldier, soldierReady } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
 import { dispose } from './models.js';
 import { snap, lightStage, VIEWS } from './studio.js';
@@ -70,8 +70,11 @@ function frame(now) {
   if (body) {
     const u = body.userData, b = calm ? 0 : Math.sin(now / 900);
     body.rotation.y = turn;
-    u.torso.scale.y = 1 + b * 0.004; u.aim.rotation.x = -0.12 + b * 0.012; u.head.rotation.y = calm ? 0 : Math.sin(now / 2300) * 0.07;
-    u.legs[0].rotation.x = 0.1; u.legs[1].rotation.x = -0.12; u.legs[1].userData.knee.rotation.x = -0.06;
+    if (u.rig) u.rig.update(calm ? 0 : dt, { pitch: -0.12 + b * 0.012, headYaw: calm ? 0 : Math.sin(now / 2300) * 0.07 });
+    else {
+      u.torso.scale.y = 1 + b * 0.004; u.aim.rotation.x = -0.12 + b * 0.012; u.head.rotation.y = calm ? 0 : Math.sin(now / 2300) * 0.07;
+      u.legs[0].rotation.x = 0.1; u.legs[1].rotation.x = -0.12; u.legs[1].userData.knee.rotation.x = -0.06;
+    }
   }
   R.render(scene, cam);
 }
@@ -184,6 +187,7 @@ $('nameIn').onblur = () => { $('nameIn').value = cleanName($('nameIn').value); }
   for (const [k, v] of [['Matches', r.matches], ['Wins', r.wins], ['Kills', r.kills], ['Headshots', r.heads], ['K/D', kd]]) $('record').append(el('dt', '', k), el('dd', '', v));
   $('record').title = 'Your online matches on this device';
 }
+await soldierReady;   // the rigged soldier, or the block one if it cannot load
 all();
 requestAnimationFrame(frame);
 if (configured && maybeSignedIn()) ownedProducts().then(s => { owned = s; paintItems(); note(); }, () => {});

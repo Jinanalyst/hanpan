@@ -5,7 +5,7 @@ import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, WALL, a
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
-import { makeSoldier, setWeapon, disposeSoldier, outfit } from './soldier.js';
+import { makeSoldier, setWeapon, disposeSoldier, outfit, soldierReady } from './soldier.js';
 import { buildGun, buildEquip } from './arsenal.js';
 import { bake, box, dispose } from './models.js';
 import { snap, closeStudio } from './studio.js';
@@ -835,51 +835,63 @@ function interpRemotes(dt) {
     s.wl = B[10] | 0; s.pk = s.wl ? (A[10] === B[10] ? A[11] + (B[11] - A[11]) * k : B[11]) : 0;
     const g = o.g, u = g.userData;
     if (!s.alive) {
-      o.dead = Math.min(1, o.dead + dt * 3);
-      u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0; o.lean = 0;
+      o.dead = Math.min(1, o.dead + dt * 3); o.lean = 0;
+      if (o.tag) o.tag.visible = false;
+      if (u.rig) {   // the death clip does the falling
+        g.rotation.set(0, s.yaw, 0); g.position.set(s.x, s.y, s.z);
+        u.rig.update(dt, { dead: true });
+        continue;
+      }
+      u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0;
       g.rotation.set(-Math.PI / 2 * o.dead, s.yaw, 0, 'YXZ');
       g.position.set(s.x, s.y + 0.15 * o.dead, s.z);
-      if (o.tag) o.tag.visible = false;
       continue;
     }
     o.pr = (o.pr || 0) + ((s.cr === 2 ? 1 : 0) - (o.pr || 0)) * Math.min(1, dt * 9);
     if (o.dead) { o.dead = 0; o.px = s.x; o.pz = s.z; }
-    const sp2 = Math.hypot(s.x - o.px, s.z - o.pz) / Math.max(dt, 1e-3);
+    const sp2 = Math.hypot(s.x - o.px, s.z - o.pz) / Math.max(dt, 1e-3), fwd = -(Math.sin(s.yaw) * (s.x - o.px) + Math.cos(s.yaw) * (s.z - o.pz)) / Math.max(dt, 1e-3);
     o.px = s.x; o.pz = s.z;
     o.walk += dt * Math.min(sp2, 7) * 1.6;
     const pr = o.pr;                       // 0 upright, 1 lying face down
     g.position.set(s.x + Math.sin(s.yaw) * 0.85 * pr, s.y + 0.16 * pr, s.z + Math.cos(s.yaw) * 0.85 * pr);
     g.rotation.set(-Math.PI / 2 * pr, s.yaw, 0, 'YXZ');
-    u.aim.rotation.x = s.pitch + pr * Math.PI / 2; u.head.rotation.x = s.pitch * 0.5 * (1 - pr) + pr * 1.25;
-    const sw = Math.sin(o.walk) * Math.min(1, sp2 / 3) * 0.7;
-    if (s.cr === 2) {
-      u.torso.position.y = 0.9;
-      u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.x = 0; l.rotation.z = (i ? 1 : -1) * (0.14 + sw * 0.1); l.userData.knee.rotation.x = -Math.max(0, i ? sw : -sw) * 0.8; });
-    } else if (s.cr) {
-      u.torso.position.y = 0.55;
-      u.legs.forEach((l, i) => { l.position.y = 0.55; l.rotation.z = 0; l.rotation.x = i ? 0.05 + sw * 0.3 : 1.35 - sw * 0.3; l.userData.knee.rotation.x = i ? -1.5 : -1.35; });   // one knee on the ground
+    if (u.rig) {
+      const lean = poseLean(o, s, dt, sp2, pr);
+      u.rig.update(dt, { speed: sp2, back: fwd < -0.3 * sp2, cr: s.cr, pr, pitch: s.pitch, ...lean });
     } else {
-      u.torso.position.y = 0.9;
-      u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.z = 0; l.rotation.x = i ? sw : -sw; l.userData.knee.rotation.x = -Math.max(0, (i ? -sw : sw)) * 1.1; });
+      u.aim.rotation.x = s.pitch + pr * Math.PI / 2; u.head.rotation.x = s.pitch * 0.5 * (1 - pr) + pr * 1.25;
+      const sw = Math.sin(o.walk) * Math.min(1, sp2 / 3) * 0.7;
+      if (s.cr === 2) {
+        u.torso.position.y = 0.9;
+        u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.x = 0; l.rotation.z = (i ? 1 : -1) * (0.14 + sw * 0.1); l.userData.knee.rotation.x = -Math.max(0, i ? sw : -sw) * 0.8; });
+      } else if (s.cr) {
+        u.torso.position.y = 0.55;
+        u.legs.forEach((l, i) => { l.position.y = 0.55; l.rotation.z = 0; l.rotation.x = i ? 0.05 + sw * 0.3 : 1.35 - sw * 0.3; l.userData.knee.rotation.x = i ? -1.5 : -1.35; });   // one knee on the ground
+      } else {
+        u.torso.position.y = 0.9;
+        u.legs.forEach((l, i) => { l.position.y = 0.9; l.rotation.z = 0; l.rotation.x = i ? sw : -sw; l.userData.knee.rotation.x = -Math.max(0, (i ? -sw : sw)) * 1.1; });
+      }
+      poseLean(o, s, dt, sp2, pr);
     }
-    poseLean(o, s, dt, sp2, pr);
     const mate = o.team === myTeam;
     if (mate && !o.tag) { const p = roster.get(id); if (p) { o.tag = nameTag(p.n, '#9fe0ff'); g.add(o.tag); } }
     if (o.tag) { o.tag.visible = mate; o.tag.position.set(0, 2.15 - 1.2 * pr, 0.85 * pr); }
   }
 }
 
-// Back (or shoulder) on the wall; the upper body leans out along it.
+// Back (or shoulder) on the wall; the upper body leans out along it. Moves the soldier along the wall and poses
+// the block soldier; for the rigged one it returns the lean instead: { rear, side, low, wallFoot }.
 function poseLean(o, s, dt, sp2, pr) {
-  const u = o.g.userData, w = s.cr === 2 ? null : WALL[s.wl];
+  const u = o.g.userData, w = s.cr === 2 ? null : WALL[s.wl], rig = !!u.rig;
   if (w) { o.wall = w; o.pk = s.pk; } else o.pk = (o.pk || 0) * (1 - Math.min(1, dt * 10));
   o.lean = (o.lean || 0) + ((w ? 1 : 0) - (o.lean || 0)) * Math.min(1, dt * 10);
-  if (o.lean < 0.01) { if (u.torso.rotation.x || u.torso.rotation.z) { u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0; } return; }
+  if (o.lean < 0.01) { if (!rig && (u.torso.rotation.x || u.torso.rotation.z)) { u.torso.rotation.set(0, 0, 0); u.aim.rotation.z = 0; } return {}; }
   const [wx, wz] = o.wall, [tx, tz] = alongWall(o.wall), k = o.lean, pk = o.pk, a = Math.abs(pk), sn = Math.sin(s.yaw), cs = Math.cos(s.yaw);
   const back = Math.max(0, wx * sn + wz * cs), hunch = s.cr === 1 ? 0.5 * (1 - a) : 0;   // back: 1 with the back to the wall
   o.g.position.x += (tx * pk * 0.26 + wx * 0.07) * k; o.g.position.z += (tz * pk * 0.26 + wz * 0.07) * k;
   const dx = tx * pk * 0.5 + wx * 0.1 * back * (1 - a), dz = tz * pk * 0.5 + wz * 0.1 * back * (1 - a);
   const side = (dx * cs - dz * sn) * k, rear = (dx * sn + dz * cs - hunch) * k * (1 - pr);
+  if (rig) return { rear, side, low: s.cr === 1 ? k * (1 - a) : 0, wallFoot: s.cr !== 1 && back > 0.5 && sp2 < 0.4 && a < 0.3 ? k : 0 };
   u.torso.rotation.set(rear, 0, -side);
   u.aim.rotation.x -= rear; u.aim.rotation.z = side * 0.8; u.head.rotation.x -= rear * 0.6;
   if (s.cr === 1) {
@@ -887,6 +899,7 @@ function poseLean(o, s, dt, sp2, pr) {
     u.torso.position.y -= 0.15 * low;
     u.legs.forEach((l, i) => { l.position.y -= 0.15 * low; l.rotation.x += (i ? -0.55 : 0.33) * low; l.userData.knee.rotation.x += (i ? 0.43 : -0.33) * low; });
   } else if (back > 0.5 && sp2 < 0.4 && a < 0.3) { u.legs[0].rotation.x = 0.5 * k; u.legs[0].userData.knee.rotation.x = -1.25 * k; }   // one foot on the wall
+  return {};
 }
 
 /* ---------------- shooting ---------------- */
@@ -1183,6 +1196,7 @@ function warm() {
   return w.done;
 }
 async function warmUp(w) {
+  await soldierReady;   // so everyone is dressed in the rigged soldier when it can load
   samples ||= makeSamples();
   buildVM(myTeam);
   await within(Promise.all([R.compileAsync(scene, cam), R.compileAsync(samples, cam, scene), R.compileAsync(vmScene, vmCam)]), 8000);
@@ -1279,6 +1293,7 @@ function paintPortrait() {
 }
 paintLo();
 paintPortrait();
+soldierReady.then(ok => { if (ok) paintPortrait(); });   // again in the rigged soldier once it has loaded
 addEventListener('pageshow', e => { if (e.persisted) { profile = loadProfile(); $('nameIn').value = loadName(); paintLo(); paintPortrait(); } });
 let land = store.get('hanpan-land', DEFAULT_MAP);
 if (land !== 'any' && !isMap(land)) land = DEFAULT_MAP;
