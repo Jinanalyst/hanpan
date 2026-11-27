@@ -5,7 +5,7 @@ import { PHYS, NADE_DT, step, stepNade, nadeStart, stanceEye, fitStance, WALL, a
 import { WEAPONS, EQUIP, PRIMARIES, SIDEARMS } from './shared/weapons.js';
 import { SLOTS, itemsOf, packGear, unpackGear } from './shared/gear.js';
 import { loadProfile, saveProfile, activeKit, loadName, saveName, addRecord } from './profile.js';
-import { makeSoldier, setWeapon, disposeSoldier, outfit, soldierReady } from './soldier.js?v=glb1';   // the CDN keeps .js files for a week: change ?v whenever soldier.js changes
+import { makeSoldier, setWeapon, disposeSoldier, outfit, soldierReady } from './soldier.js?v=glb2';   // the CDN keeps .js files for a week: change ?v whenever soldier.js changes
 import { buildGun, buildEquip } from './arsenal.js';
 import { bake, box, dispose } from './models.js';
 import { snap, closeStudio } from './studio.js';

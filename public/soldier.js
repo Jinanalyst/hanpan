@@ -5,9 +5,9 @@ import { box, part, limb, cylG, ballG, torusG, mat, camoMat, CAMO, bake, dispose
 import { buildGun } from './arsenal.js';
 import { WEAPONS } from './shared/weapons.js';
 import { cleanGear } from './shared/gear.js';
-import { hasRig, makeRig } from './soldierglb.js';
+import { hasRig, makeRig, MODEL, keyedMaterial } from './soldierglb.js?v=2';
 
-export { soldierReady, hasRig } from './soldierglb.js';
+export { soldierReady, hasRig } from './soldierglb.js?v=2';
 
 export const TEAMC = {
   red: { u: 0xb59a6a, v: 0x6e5c40, band: 0xd03a28, helm: 0x8a7550 },
@@ -118,21 +118,25 @@ const knee = (k, M) => { box(k, 0.14, 0.16, 0.06, 0, 0.0, -0.085, M.dark, 0.025)
 const holster = l => { box(l, 0.05, 0.2, 0.1, 0.115, -0.17, 0, BLACK, 0.012); box(l, 0.04, 0.07, 0.045, 0.12, -0.05, 0.02, STEEL, 0.008, -0.3); for (const y of [-0.13, -0.22]) box(l, 0.2, 0.02, 0.2, 0, y, 0, STRAP, 0.02); };
 
 // The head with its headgear and face gear: neck at y 0, eyes at y 0.13, looking to -z.
-function buildHead(gear, M) {
+// skull = false gives only the gear, for a body that brings its own face and hair.
+function buildHead(gear, M, skull = true) {
   const h = new THREE.Group(); h.userData.keep = true;
-  const sk = part(h, ballG(0.108, 1, 20), M.skin, 0, 0.12, 0); sk.scale.set(0.93, 1.14, 1.02);
   const covered = gear.face === 'balaclava' || gear.face === 'gasmask';
-  box(h, 0.115, 0.08, 0.115, 0, 0.045, -0.028, gear.face === 'balaclava' ? BLACK : M.skin, 0.04);
-  if (!covered) box(h, 0.03, 0.05, 0.035, 0, 0.105, -0.112, M.skin, 0.012);
-  for (const s of [-1, 1]) {
-    part(h, ballG(0.012, 1, 10), mat(0xf4f1ea, 0.4), s * 0.038, 0.135, -0.098); part(h, ballG(0.0075, 1, 8), BLACK, s * 0.038, 0.135, -0.107);
-    box(h, 0.04, 0.009, 0.012, s * 0.04, 0.157, -0.104, M.hair, 0.003, 0, s * -0.2); part(h, ballG(0.022, 1, 10), M.skin, s * 0.102, 0.115, 0.01);
+  if (skull) {
+    const sk = part(h, ballG(0.108, 1, 20), M.skin, 0, 0.12, 0); sk.scale.set(0.93, 1.14, 1.02);
+    box(h, 0.115, 0.08, 0.115, 0, 0.045, -0.028, gear.face === 'balaclava' ? BLACK : M.skin, 0.04);
+    if (!covered) box(h, 0.03, 0.05, 0.035, 0, 0.105, -0.112, M.skin, 0.012);
+    for (const s of [-1, 1]) {
+      part(h, ballG(0.012, 1, 10), mat(0xf4f1ea, 0.4), s * 0.038, 0.135, -0.098); part(h, ballG(0.0075, 1, 8), BLACK, s * 0.038, 0.135, -0.107);
+      box(h, 0.04, 0.009, 0.012, s * 0.04, 0.157, -0.104, M.hair, 0.003, 0, s * -0.2); part(h, ballG(0.022, 1, 10), M.skin, s * 0.102, 0.115, 0.01);
+    }
+    if (!covered) box(h, 0.045, 0.008, 0.01, 0, 0.052, -0.088, mat(0x6e3a30, 0.9), 0.003);
   }
-  if (!covered) box(h, 0.045, 0.008, 0.01, 0, 0.052, -0.088, mat(0x6e3a30, 0.9), 0.003);
-  HELMET[gear.helmet](h, M);
+  if (skull || gear.helmet !== 'none') HELMET[gear.helmet](h, M);
+  else head.band(h, M, 0.178, 0.124);   // bare head: the model's own hair, with the team band around it
   FACE[gear.face](h, M);
   h.traverse(o => { if (o.isMesh && !o.material) o.material = M.skin; });
-  if (gear.face === 'balaclava') for (const s of [-1, 1]) { part(h, ballG(0.011, 1, 10), mat(0xf4f1ea, 0.4), s * 0.038, 0.135, -0.112); part(h, ballG(0.0075, 1, 8), BLACK, s * 0.038, 0.135, -0.12); }
+  if (skull && gear.face === 'balaclava') for (const s of [-1, 1]) { part(h, ballG(0.011, 1, 10), mat(0xf4f1ea, 0.4), s * 0.038, 0.135, -0.112); part(h, ballG(0.0075, 1, 8), BLACK, s * 0.038, 0.135, -0.12); }
   return h;
 }
 // Vest, pack, belt pouches and the team patch on the back, in the torso's space (hips at y 0).
@@ -149,22 +153,24 @@ export function makeSoldier(team, gearIn, weapon = 'rifle') {
   return hasRig() ? rigSoldier(team, gearIn, weapon) : blockSoldier(team, gearIn, weapon);
 }
 
-// Rigged body colours: uniform (or the camouflage base), vest and pads, boots, gloves (or bare hands).
-const FIT = { head: { y: -0.035, z: 0.01, s: 1.22 }, torso: { y: 0.93, z: 0, s: [1, 0.98, 1.05] }, aim: { y: 1.4 } };   // gear fitted to the SWAT body
+// The rigged soldier. Body colours: uniform (or the camouflage base), skin, team patch; on the part-coloured
+// model also vest and pads, boots and gloves. FIT places the gear on the model's body.
 function rigSoldier(team, gearIn, weapon) {
+  const FIT = MODEL.fit;
   const gear = cleanGear(gearIn), M = outfit(team, gear), g = new THREE.Group(), u = { team, gear, weapon: '' }, C = CAMO[gear.camo];
   g.userData = u;
   const rig = makeRig(g), B = rig.bones;
-  const RC = { cloth: mat(C ? new THREE.Color(C.base).getHex() : TEAMC[team].u, 0.92), dark: M.dark, boot: M.boot, glove: M.glove };
+  const cloth = C ? new THREE.Color(C.base).getHex() : TEAMC[team].u;
+  const RC = { cloth: mat(cloth, 0.92), dark: M.dark, boot: M.boot, glove: M.glove };
   u.rig = rig;
-  for (const m of rig.meshes) m.material = RC[m.userData.role] || RC.cloth;
+  for (const m of rig.meshes) m.material = MODEL.recolor === 'key' ? keyedMaterial(m.material, cloth, SKIN[gear.skin], TEAMC[team].band) : RC[m.userData.role] || RC.cloth;
   const hang = (bone, obj) => { g.add(obj); obj.updateMatrixWorld(true); bone.attach(obj); return obj; };
   // head, headgear and face gear on the head bone
   const hp = B.head.getWorldPosition(new THREE.Vector3());
-  const h = buildHead(gear, M);
-  part(h, cylG(0.055, 0.062, 0.1), gear.face === 'balaclava' ? BLACK : M.skin, 0, -0.01, 0.005);   // neck
+  const own = MODEL.head === 'model', h = buildHead(gear, M, !own);
+  if (!own) part(h, cylG(0.055, 0.062, 0.1), gear.face === 'balaclava' ? BLACK : M.skin, 0, -0.01, 0.005);   // neck
   bake(h);
-  h.position.set(0, hp.y + FIT.head.y, hp.z + FIT.head.z); h.scale.setScalar(FIT.head.s);
+  h.position.set(hp.x + (FIT.head.x || 0), hp.y + FIT.head.y, hp.z + FIT.head.z); h.scale.setScalar(FIT.head.s);
   u.head = hang(B.head, h);
   // vest, pack, pouches and the back patch on the torso bone
   const t = new THREE.Group(); t.userData.keep = true;

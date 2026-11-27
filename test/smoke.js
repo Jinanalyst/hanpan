@@ -551,7 +551,7 @@ for (const id of MAP_IDS) {
     assert.ok(ro.ps.some(p => p.n === 'One') && ro.ps.some(p => p.n === 'Two'));
     const status = await (await fetch(`http://localhost:${port}/status`)).json();
     assert.equal(status.rooms[0].humans, 2);
-    for (const f of ['character.html', 'character.js', 'shared/gear.js', 'soldier.js', 'soldierglb.js', 'models/soldier.glb', 'cityscape.js', 'shared/cities.js', 'shared/landkit.js', 'models.js', 'arsenal.js', 'studio.js', 'profile.js']) assert.equal((await fetch(`http://localhost:${port}/${f}`)).status, 200, f);
+    for (const f of ['character.html', 'character.js', 'shared/gear.js', 'soldier.js', 'soldierglb.js', 'models/soldier.glb', 'models/soldier-v2.glb', 'cityscape.js', 'shared/cities.js', 'shared/landkit.js', 'models.js', 'arsenal.js', 'studio.js', 'profile.js']) assert.equal((await fetch(`http://localhost:${port}/${f}`)).status, 200, f);
     const html = await (await fetch(`http://localhost:${port}/`)).text();
     assert.ok(html.includes('client.js'), 'client page served');
     // land choice: own room per land, 'any' joins the busiest room, bad or missing values get the default land

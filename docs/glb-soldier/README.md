@@ -1,5 +1,22 @@
 # 리그가 있는 GLB 병사
 
+## 지금 기본 모델: Meshy 6 커스텀 병사 (`public/models/soldier-v2.glb`)
+
+![Meshy soldier poses](meshy-poses.png)
+![Meshy soldier gear](meshy-gear.png)
+
+- Higgsfield CLI로 만들었습니다. 텍스트 → 3D(`meshy_v6_text_to_3d`: A-pose, 삼각형 5천 개 목표, 대칭, 자동 리깅, 키 1.8 m) 후 `3d_rigging`으로 애니메이션 클립을 하나씩 만들었습니다.
+  - 클립(Meshy 라이브러리 id): Idle 0, Walk 690 `Walk_Forward_While_Shooting_inplace`, Run 654 `Rifle_Charge_inplace`, Death 183 `Shot_and_Fall_Backward`, Crouch 616 `Cautious_Crouch_Walk_Forward_inplace`
+  - 비용: 모델 25 크레딧 + 클립 5개 × 8 = **65 크레딧**
+- `tools/models/merge-clips.mjs`로 클립 5개를 GLB 하나로 합치고, 텍스처를 1024 px로 줄이고, 양자화했습니다: **715 KB**, **5,198 삼각형**, 뼈 24개(손가락 없음).
+- 몸은 텍스처 한 장짜리 메시라서, 셰이더가 텍스처 색을 보고 군복(카키) → 팀/위장 색, 피부 → `gear.skin`, 어깨의 주황 패치 → 팀 색으로 바꿉니다(`keyedMaterial`). 장갑과 부츠 색은 이 모델에서는 바뀌지 않습니다.
+- 모델 자체의 얼굴과 머리카락을 쓰고, 헬멧과 얼굴 장비만 그 위에 씌웁니다(`MODEL.head = 'model'`).
+- 12명 리그 update 합계 프레임당 약 0.5 ms. 봇 11명 판에서 60 fps.
+- 예전 Quaternius SWAT 몸은 `?model=swat`, 도형 병사는 `?legacy=1`로 볼 수 있습니다.
+- **캐시 주의**: CDN이 `.js`를 7일 동안 캐시합니다. `soldier.js`나 `soldierglb.js`를 바꾸면 `?v=` 값을 올리세요(`index.html`, `character.html`, `client.js`, `character.js`, `soldier.js`).
+
+아래는 처음 SWAT 모델로 바꿀 때의 기록입니다.
+
 다른 플레이어를 기본 도형 조합 대신 **리그가 있는 GLB 모델**로 그립니다. 서버 물리·히트박스(`shared/physics.js`)와 1인칭 뷰모델(`outfit()`)은 건드리지 않았습니다.
 
 ![before/after poses](compare-pose.png)
