@@ -104,6 +104,7 @@ details{margin-top:8px;font-size:15px}summary{cursor:pointer;color:var(--tan)}de
 
 /* wallet login */
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.motto{margin:4px 0 0;font:600 15px/1 Rajdhani,sans-serif;letter-spacing:.32em;text-transform:uppercase;color:var(--tan);opacity:.75}@media(max-height:760px){#menu .motto{font-size:13px;margin-top:2px}}
 #account{display:flex;align-items:center;gap:8px;font-size:15px}#account a,.links a{color:var(--tan)}#account button{min-height:32px;font-size:14px;padding:0 10px}
 .loginPage{background:radial-gradient(circle at 50% 30%,#4a5133,#1d2016 70%)}
 .loginPage .ov{overflow:auto}.loginPage [hidden]{display:none}
